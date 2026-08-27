@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+@theme {
+  --color-void: #000000;
+  --color-carbon: #111111;
+  --color-graphite: #191919;
+  --color-iron: #202020;
+  --color-slate: #3a3a3a;
+  --color-pewter: #505050;
+  --color-steel: #606060;
+  --color-ash: #7e7e7e;
+  --color-fog: #b4b4b4;
+  --color-chalk: #d9d9d9;
+  --color-paper: #eeeeee;
+  --color-ember: #da5c2c;
+
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, monospace;
+
+  --radius-axiom: 2px;
+  --text-caption: 12px;
+  --text-body: 14px;
+  --text-heading-sm: 18px;
+  --text-heading: 20px;
+}
+
+:root {
+  --color-void: #000000;
+  --color-carbon: #111111;
+  --color-graphite: #191919;
+  --color-iron: #202020;
+  --color-slate: #3a3a3a;
+  --color-pewter: #505050;
+  --color-steel: #606060;
+  --color-ash: #7e7e7e;
+  --color-fog: #b4b4b4;
+  --color-chalk: #d9d9d9;
+  --color-paper: #eeeeee;
+  --color-ember: #da5c2c;
+
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, monospace;
+
+  --text-caption: 12px;
+  --leading-caption: 1.5;
+  --text-body: 14px;
+  --leading-body: 1.71;
+  --text-heading-sm: 18px;
+  --leading-heading-sm: 1.56;
+  --text-heading: 20px;
+  --leading-heading: 1.4;
+
+  --space-8: 8px;
+  --space-16: 16px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-40: 40px;
+
+  --radius: 2px;
+}

@@ -1,0 +1,9 @@
+services:
+  image:
+    profiles: ["build"]
+    build:
+      context: ../..
+      dockerfile: infra/kasm/Dockerfile
+      args:
+        KASM_TAG: "1.16.1"
+    image: webmcp-kasm:local

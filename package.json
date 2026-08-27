@@ -1,0 +1,11 @@
+{
+  "name": "webmcp-computer",
+  "private": true,
+  "packageManager": "pnpm@10.6.5",
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "dev:api": "pnpm --filter @webmcp-computer/api dev",
+    "dev:web": "pnpm --filter @webmcp-computer/web dev",
+    "dev:bridge": "pnpm --filter @webmcp-computer/bridge dev"
+  }
+}
