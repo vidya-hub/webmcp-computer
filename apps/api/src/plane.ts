@@ -332,7 +332,7 @@ export class Plane implements ControlPlane {
     if (tape) {
       const buf = await grabShot(machine, useBrowser);
       if (buf) {
-        putShot(computerId, eventId, "before", buf);
+        await putShot(computerId, eventId, "before", buf);
         before = true;
       }
     }
@@ -354,7 +354,7 @@ export class Plane implements ControlPlane {
           before,
           after: false,
         };
-        appendEvent(ev);
+        await appendEvent(ev);
         this.emit({ type: "tape", event: ev });
       }
       if (err instanceof HttpError) throw err;
@@ -364,7 +364,7 @@ export class Plane implements ControlPlane {
     if (tape) {
       const buf = await grabShot(machine, useBrowser);
       if (buf) {
-        putShot(computerId, eventId, "after", buf);
+        await putShot(computerId, eventId, "after", buf);
         after = true;
       }
       const mut = mutation(op);
@@ -380,7 +380,7 @@ export class Plane implements ControlPlane {
         before,
         after,
       };
-      appendEvent(ev);
+      await appendEvent(ev);
       this.emit({ type: "tape", event: ev });
     }
 

@@ -59,16 +59,16 @@ app.use(
 app.get("/health", (c) => c.json({ ok: true }));
 app.get("/api/health", (c) => c.json({ ok: true }));
 
-app.get("/api/tape", (c) => {
-  return c.json({ events: listTape() });
+app.get("/api/tape", async (c) => {
+  return c.json({ events: await listTape() });
 });
 
-app.get("/api/tape/:id/:side", (c) => {
+app.get("/api/tape/:id/:side", async (c) => {
   const side = c.req.param("side");
   if (side !== "before" && side !== "after") {
     return c.json({ error: "before or after" }, 400);
   }
-  const buf = getShot(c.req.param("id"), side);
+  const buf = await getShot(c.req.param("id"), side);
   if (!buf) return c.body(null, 404);
   return new Response(buf, {
     headers: { "content-type": "image/png", "cache-control": "private, max-age=3600" },

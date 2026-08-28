@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS tape_events (
   output      jsonb,
   error       jsonb,
   has_before  boolean NOT NULL DEFAULT false,
-  has_after   boolean NOT NULL DEFAULT false
+  has_after   boolean NOT NULL DEFAULT false,
+  log         text
 );
 
 CREATE INDEX IF NOT EXISTS tape_events_at_idx ON tape_events (at DESC);
