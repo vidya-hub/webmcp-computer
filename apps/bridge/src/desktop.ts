@@ -71,8 +71,8 @@ export async function focusWindow(windowId: string): Promise<DeskWindow[]> {
 
 const APPS = {
   chromium: ["chromium", "about:blank"],
-  terminal: ["xfce4-terminal"],
-  files: ["thunar"],
+  terminal: ["xterm"],
+  files: ["pcmanfm"],
 } as const;
 
 export async function launchApp(
@@ -92,31 +92,34 @@ export async function launchApp(
 export async function screenshot(
   windowId?: string,
 ): Promise<{ mimeType: "image/png"; data: string; path: string }> {
-  const args = windowId
-    ? ["-window", windowId, "png:-"]
-    : ["-window", "root", "png:-"];
+  const dir = path.join(
+    process.env.HOME ?? "/home/kasm-user",
+    "Notes",
+    "shots",
+  );
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const file = path.join(
+    dir,
+    `${stamp}${windowId ? `-${windowId}` : ""}.png`,
+  );
   try {
-    const { stdout } = await execFileAsync("import", args, {
-      encoding: "buffer",
-      maxBuffer: 5_000_000,
-      timeout: 10_000,
-      env: env(),
-    });
-    const dir = path.join(
-      process.env.HOME ?? "/home/kasm-user",
-      "Notes",
-      "shots",
-    );
-    fs.mkdirSync(dir, { recursive: true });
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const file = path.join(
-      dir,
-      `${stamp}${windowId ? `-${windowId}` : ""}.png`,
-    );
-    fs.writeFileSync(file, stdout);
+    if (windowId) {
+      await xd(["windowactivate", "--sync", windowId]);
+      await execFileAsync("scrot", ["-u", "-o", file], {
+        timeout: 10_000,
+        env: env(),
+      });
+    } else {
+      await execFileAsync("scrot", ["-o", file], {
+        timeout: 10_000,
+        env: env(),
+      });
+    }
+    const buf = fs.readFileSync(file);
     return {
       mimeType: "image/png",
-      data: stdout.toString("base64"),
+      data: buf.toString("base64"),
       path: file,
     };
   } catch (err) {

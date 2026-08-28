@@ -120,13 +120,23 @@ function writeJson(next: Appearance): void {
   fs.writeFileSync(jsonPath(), `${JSON.stringify(next, null, 2)}\n`);
 }
 
+async function applyRootColor(id: WallpaperId): Promise<void> {
+  const colors: Record<WallpaperId, string> = {
+    void: "#000000",
+    carbon: "#111111",
+    "dark-grid": "#202020",
+    arrows: "#3a3a3a",
+  };
+  await execFileAsync("xsetroot", ["-solid", colors[id]], {
+    env: displayEnv(),
+    timeout: 3000,
+  });
+}
+
 export async function readAppearance(): Promise<Appearance> {
   const has = await xfconfAvailable();
   if (!has) {
-    if (inDocker()) {
-      throw new HttpError(500, { error: "xfconf-query missing" });
-    }
-    if (allowJsonAppearance()) return readJson();
+    if (inDocker() || allowJsonAppearance()) return readJson();
     throw new HttpError(500, { error: "xfconf-query missing" });
   }
   const props = await xfconfList("xfce4-desktop");
@@ -147,10 +157,12 @@ export async function readAppearance(): Promise<Appearance> {
 export async function applyWallpaper(id: WallpaperId): Promise<Appearance> {
   const has = await xfconfAvailable();
   if (!has) {
-    if (inDocker()) {
-      throw new HttpError(500, { error: "xfconf-query missing" });
-    }
-    if (allowJsonAppearance()) {
+    if (inDocker() || allowJsonAppearance()) {
+      try {
+        await applyRootColor(id);
+      } catch {
+        /* xsetroot optional */
+      }
       const next = { ...readJson(), wallpaper: id };
       writeJson(next);
       return next;
@@ -196,10 +208,7 @@ export async function applyTheme(theme: ThemeId): Promise<Appearance> {
   const has = await xfconfAvailable();
   const gtk = theme === "dark" ? "Adwaita-dark" : "Adwaita";
   if (!has) {
-    if (inDocker()) {
-      throw new HttpError(500, { error: "xfconf-query missing" });
-    }
-    if (allowJsonAppearance()) {
+    if (inDocker() || allowJsonAppearance()) {
       const next = { ...readJson(), theme };
       writeJson(next);
       return next;

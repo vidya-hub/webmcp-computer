@@ -58,7 +58,7 @@ export async function listPorts(): Promise<{ ports: Port[] }> {
       const r = await execFileAsync("ss", ["-lntu"], { timeout: 5_000 });
       stdout = r.stdout;
     } catch {
-      return { ports: [] };
+      throw new HttpError(502, { error: "ss not available" });
     }
   }
   const ports: Port[] = [];
@@ -107,13 +107,15 @@ export async function installPackage(
     throw new HttpError(400, { error: "invalid package name" });
   }
   try {
+    const env = { ...process.env, DEBIAN_FRONTEND: "noninteractive" };
+    await execFileAsync("sudo", ["-n", "apt-get", "update"], {
+      timeout: 60_000,
+      env,
+    });
     const { stdout, stderr } = await execFileAsync(
-      "apt-get",
-      ["install", "-y", name],
-      {
-        timeout: 120_000,
-        env: { ...process.env, DEBIAN_FRONTEND: "noninteractive" },
-      },
+      "sudo",
+      ["-n", "apt-get", "install", "-y", name],
+      { timeout: 120_000, env },
     );
     return { name, stdout: (stdout + stderr).slice(0, 4000) };
   } catch (err) {

@@ -5,7 +5,7 @@ import { HOME_JAIL_DEFAULT } from "@webmcp-computer/contract";
 import { HttpError } from "./http-error.ts";
 
 export function jailRoot(): string {
-  return process.env.HOME_JAIL ?? HOME_JAIL_DEFAULT;
+  return process.env.HOME_JAIL ?? process.env.HOME ?? HOME_JAIL_DEFAULT;
 }
 
 export function allowJsonAppearance(): boolean {

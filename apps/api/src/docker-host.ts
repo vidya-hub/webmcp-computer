@@ -13,7 +13,14 @@ import type { ComputerHost, ComputerRecord } from "./host.ts";
 import { HttpMachine } from "./http-machine.ts";
 
 const execFileAsync = promisify(execFile);
-const IMAGE = "webmcp-kasm:local";
+const IMAGE = process.env.COMPUTER_IMAGE ?? "webmcp-slim:local";
+
+function vncUrlFor(port: string, imageName = IMAGE): string {
+  const scheme =
+    process.env.VNC_SCHEME ??
+    (imageName.startsWith("webmcp-kasm") ? "https" : "http");
+  return `${scheme}://127.0.0.1:${port}`;
+}
 
 function dk(args: string[], timeout = 20_000) {
   return execFileAsync("docker", args, { timeout });
@@ -81,6 +88,12 @@ export class DockerHost implements ComputerHost {
           cname,
         ]);
         const env = envMap(envOut.split("\n"));
+        const { stdout: imageOut } = await dk([
+          "inspect",
+          "-f",
+          "{{.Config.Image}}",
+          cname,
+        ]);
         const vnc = parsePort((await dk(["port", cname, "6901/tcp"])).stdout);
         const bridge = parsePort((await dk(["port", cname, "8080/tcp"])).stdout);
         const wallpaper = (
@@ -95,7 +108,7 @@ export class DockerHost implements ComputerHost {
           os: "Ubuntu 24.04",
           role: "computer",
           wallpaper,
-          vncUrl: `https://127.0.0.1:${vnc}`,
+          vncUrl: vncUrlFor(vnc, imageOut.trim()),
         };
         this.records.set(record.id, record);
         this.machines.set(record.id, new HttpMachine(`http://127.0.0.1:${bridge}`));
@@ -134,6 +147,12 @@ export class DockerHost implements ComputerHost {
           "webmcp.computer=1",
           "--shm-size",
           "512m",
+          "--memory",
+          "2g",
+          "--cpus",
+          "1.5",
+          "--pids-limit",
+          "512",
           "-p",
           "127.0.0.1:0:6901",
           "-p",
@@ -173,7 +192,7 @@ export class DockerHost implements ComputerHost {
       os: "Ubuntu 24.04",
       role: spec.role?.trim() || "computer",
       wallpaper,
-      vncUrl: `https://127.0.0.1:${vnc}`,
+      vncUrl: vncUrlFor(vnc, IMAGE),
     };
     const machine = new HttpMachine(`http://127.0.0.1:${bridge}`);
     this.records.set(record.id, record);

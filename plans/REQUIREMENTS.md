@@ -136,21 +136,20 @@ One adapter per process. Never both (that duplicates the list again).
 
 The process **is** the computer. `MACHINE_ID` / `MACHINE_NAME` / `WALLPAPER` from env. `POST /act`, `GET /health`.
 
-- File jail: realpath under `/home/kasm-user` (or `HOME_JAIL`). 400 `{ error: "path outside jail" }`. Read cap 256KB.
+- File jail: realpath under `$HOME` / `HOME_JAIL` (computer id user on slim). 400 `{ error: "path outside jail" }`. Read cap 256KB.
 - `run`: wait ≤30s, or **detach** if `isDetachedCommand` (`npm run dev` / `start` / pnpm / yarn). Detach: `{ exitCode: null, running: true, pid, stdout }` after `/Local:\s|listening|ready/i` or 8s.
-- Appearance: XFCE is source of truth. `/.dockerenv` and xfconf missing or apply failed → throw. Laptop `ALLOW_JSON_APPEARANCE=1` may use json.
+- Appearance: Openbox slim uses `xsetroot` + `$JAIL/.webmcp-appearance.json`. XFCE/`xfconf` only if that binary exists. Laptop `ALLOW_JSON_APPEARANCE=1` may use json.
 - Browser: CDP `127.0.0.1:9222` on the **visible** Chromium. CDP down: `browser()` empty 200. `openUrl` starts Chromium once if CDP is down, then navigates. No restart loop. Tab tools, visible text, find text, and CSS-selector click are allowed. Guest `xdotool` mouse/keyboard is allowed. No `find_pixel`. No host-page click.
 
-### Desktop image (`infra/kasm`)
+### Desktop image (`infra/slim`)
 
-One image. Not two services.
+One image: `webmcp-slim:local`. Debian bookworm-slim, Openbox, Chromium, TigerVNC, noVNC.
 
-- Chromium flags: `--remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 --no-sandbox --disable-dev-shm-usage --user-data-dir=…`
-- Chromium flags in `/etc/chromium.d/webmcp` so any launch (panel, shell, `openUrl`) works in Docker. No autostart loop.
-- Wallpapers `/usr/share/backgrounds/webmcp/{void,carbon,dark-grid,arrows}.png`. No gradients.
-- Seed `/home/kasm-user/project` with `"dev": "vite --host 127.0.0.1 --port 5173"`.
-- `custom_startup.sh`: wallpaper from `WALLPAPER`, start **real** bridge. Do not start Chromium.
-- `shm_size=512m`. VNC login `kasm_user` / `password`. VNC is HTTPS self-signed.
+- Guest Linux user = `MACHINE_ID` (override `LINUX_USER`). Home `/home/<id>`.
+- Chromium flags in `/etc/chromium.d/webmcp`. `openUrl` starts Chromium once if CDP is down. No restart loop.
+- Wallpaper: `xsetroot` solid from `WALLPAPER`.
+- Bridge is prebuilt `node /opt/webmcp/bridge/dist/index.js`.
+- `shm_size=512m`, `--memory=2g --cpus=1.5 --pids-limit=512`. VNC HTTP on `6901`, no TLS.
 
 `DockerHost` run:
 

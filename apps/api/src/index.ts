@@ -5,6 +5,7 @@ import { cors } from "hono/cors";
 import httpProxy from "http-proxy";
 import { execFile } from "node:child_process";
 import http from "node:http";
+import net from "node:net";
 import tls from "node:tls";
 import type { Duplex } from "node:stream";
 import { promisify } from "node:util";
@@ -27,7 +28,8 @@ async function pickHost(): Promise<ComputerHost> {
     await execFileAsync("docker", ["info", "--format", "{{.ServerVersion}}"], {
       timeout: 5_000,
     });
-    await execFileAsync("docker", ["image", "inspect", "webmcp-kasm:local"], {
+    const img = process.env.COMPUTER_IMAGE ?? "webmcp-slim:local";
+    await execFileAsync("docker", ["image", "inspect", img], {
       timeout: 5_000,
     });
     const h = new DockerHost();
@@ -185,6 +187,7 @@ function desktopProxy(target: string) {
   const host = new URL(target).host;
   const proxy = httpProxy.createProxyServer({
     target,
+    ws: true,
     changeOrigin: true,
     secure: false,
     headers: { Authorization: VNC_AUTH, Host: host },
@@ -244,35 +247,64 @@ function pipeKasmWs(
     ? `Sec-WebSocket-Protocol: ${protoValue}\r\n`
     : "Sec-WebSocket-Protocol: binary\r\n";
   const path = req.url ?? "/websockify";
-  const upstream = tls.connect({
-    host: u.hostname,
-    port: Number(u.port),
-    rejectUnauthorized: false,
-  });
+  const handshake =
+    `GET ${path} HTTP/1.1\r\n` +
+    `Host: ${u.host}\r\n` +
+    `Authorization: ${VNC_AUTH}\r\n` +
+    `Upgrade: websocket\r\n` +
+    `Connection: Upgrade\r\n` +
+    `Sec-WebSocket-Key: ${key}\r\n` +
+    `Sec-WebSocket-Version: 13\r\n` +
+    protoLine +
+    `Origin: ${origin}\r\n` +
+    `Sec-WebSocket-Origin: ${origin}\r\n` +
+    `\r\n`;
+  const tlsUp = u.protocol === "https:";
+  const upstream = tlsUp
+    ? tls.connect({
+        host: u.hostname,
+        port: Number(u.port),
+        rejectUnauthorized: false,
+      })
+    : net.connect({ host: u.hostname, port: Number(u.port) });
   const fail = () => {
     upstream.destroy();
     socket.destroy();
   };
   upstream.on("error", fail);
   socket.on("error", fail);
-  upstream.on("secureConnect", () => {
-    upstream.write(
-      `GET ${path} HTTP/1.1\r\n` +
-        `Host: ${u.host}\r\n` +
-        `Authorization: ${VNC_AUTH}\r\n` +
-        `Upgrade: websocket\r\n` +
-        `Connection: Upgrade\r\n` +
-        `Sec-WebSocket-Key: ${key}\r\n` +
-        `Sec-WebSocket-Version: 13\r\n` +
-        protoLine +
-        `Origin: ${origin}\r\n` +
-        `Sec-WebSocket-Origin: ${origin}\r\n` +
-        `\r\n`,
-    );
+  const onReady = () => {
+    upstream.write(handshake);
     if (head.length > 0) upstream.write(head);
     socket.pipe(upstream);
     upstream.pipe(socket);
-  });
+  };
+  if (tlsUp) upstream.once("secureConnect", onReady);
+  else upstream.once("connect", onReady);
+}
+
+function vncViewerHtml(): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+html,body,#screen{margin:0;height:100%;background:#111}
+</style>
+</head>
+<body>
+<div id="screen"></div>
+<script type="module">
+import RFB from "./core/rfb.js";
+const proto = location.protocol === "https:" ? "wss" : "ws";
+const base = location.pathname.replace(/[^/]*$/, "");
+const rfb = new RFB(document.getElementById("screen"), proto + "://" + location.host + base + "websockify");
+rfb.scaleViewport = true;
+rfb.resizeSession = true;
+</script>
+</body>
+</html>
+`;
 }
 
 function desktopMatch(url: string): { id: string; rest: string } | null {
@@ -299,6 +331,24 @@ const server = http.createServer((req, res) => {
     if (!target) {
       res.writeHead(502, { "content-type": "text/plain" });
       res.end("desktop offline");
+      return;
+    }
+    const viewPath = parsed.rest.split("?")[0] ?? "/";
+    if (
+      viewPath === "/" ||
+      viewPath === "/index.html" ||
+      viewPath === "/vnc.html"
+    ) {
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      res.end(vncViewerHtml());
+      return;
+    }
+    if (parsed.rest.startsWith("/package.json")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end('{"name":"novnc","version":"1.3.0"}');
       return;
     }
     req.url = parsed.rest;
@@ -333,7 +383,12 @@ server.on("upgrade", (req, socket, head) => {
       return;
     }
     req.url = parsed.rest;
-    pipeKasmWs(target, req, socket, head);
+    socket.on("error", () => {});
+    if (target.startsWith("https:")) {
+      pipeKasmWs(target, req, socket, head);
+    } else {
+      proxyFor(target).ws(req, socket, head);
+    }
     return;
   }
   socket.destroy();

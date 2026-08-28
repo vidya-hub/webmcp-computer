@@ -194,7 +194,7 @@ export function WindowFrame({
           title={computer.id}
           allow="unload"
           style={ice ? { width: ice.w, height: ice.h } : undefined}
-          src={`/desktops/${encodeURIComponent(computer.id)}/?autoconnect=1&resize=remote&quality=9&compression=0&encrypt=0&path=${encodeURIComponent(`desktops/${computer.id}/websockify`)}`}
+          src={`/desktops/${encodeURIComponent(computer.id)}/?v=rfb`}
         />
       </div>
       {maximized ? null : (

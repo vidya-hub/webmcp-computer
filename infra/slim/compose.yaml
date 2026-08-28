@@ -1,0 +1,7 @@
+services:
+  image:
+    profiles: ["build"]
+    build:
+      context: ../..
+      dockerfile: infra/slim/Dockerfile
+    image: webmcp-slim:local

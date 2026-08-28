@@ -1,4 +1,4 @@
-import { HOME_JAIL_DEFAULT, type MachineOp } from "@webmcp-computer/contract";
+import { type MachineOp } from "@webmcp-computer/contract";
 import { useWebMCP } from "usewebmcp";
 import { api, toolResult } from "../api/client.ts";
 import { useWorkspace } from "../state/workspace-store.tsx";
@@ -85,7 +85,7 @@ export function MachineTools() {
     execute: async (input) =>
       act({
         op: "listFiles",
-        path: String(input.path ?? HOME_JAIL_DEFAULT),
+        path: String(input.path ?? "."),
       }),
   });
 
