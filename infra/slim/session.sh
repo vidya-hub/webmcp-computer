@@ -42,12 +42,56 @@ case "$WP" in
 esac
 xsetroot -solid "$COLOR" || true
 
+# Seed per-user desktop config. Idempotent: entrypoint.sh renames the uid-1000
+# user and home on every boot, so this must run here, not at image build time.
+SKEL=/usr/share/webmcp/skel
+WP_PATH="/usr/share/backgrounds/webmcp/${WP}.png"
+[ -f "$WP_PATH" ] || WP_PATH="/usr/share/backgrounds/webmcp/carbon.png"
+
+if [ -d "$SKEL" ]; then
+  mkdir -p "$HOME/.config" "$HOME/Desktop"
+  cp -rn "$SKEL/config/." "$HOME/.config/" 2>/dev/null || true
+  [ -f "$SKEL/.Xresources" ] && cp -n "$SKEL/.Xresources" "$HOME/.Xresources" 2>/dev/null || true
+  [ -f "$SKEL/.gtkrc-2.0" ] && cp -n "$SKEL/.gtkrc-2.0" "$HOME/.gtkrc-2.0" 2>/dev/null || true
+  [ -d "$SKEL/project" ] && cp -rn "$SKEL/project" "$HOME/" 2>/dev/null || true
+  # Launchers live on the tint2 panel, not the wallpaper.
+  for name in Chromium Files Project Terminal; do
+    rm -f "$HOME/Desktop/${name}.desktop"
+  done
+  # Drop Project from older tint2 configs that still pin it.
+  if [ -f "$HOME/.config/tint2/tint2rc" ]; then
+    sed -i '/launchers\/Project\.desktop/d' "$HOME/.config/tint2/tint2rc" || true
+  fi
+  DESK_CONF="$HOME/.config/pcmanfm/default/desktop-items-0.conf"
+  [ -f "$DESK_CONF" ] && sed -i "s|@WALLPAPER_PATH@|$WP_PATH|g" "$DESK_CONF"
+fi
+
+if [ -f "$HOME/.Xresources" ] && command -v xrdb >/dev/null 2>&1; then
+  xrdb -merge "$HOME/.Xresources" || true
+fi
+xset s off 2>/dev/null || true
+xset -dpms 2>/dev/null || true
+xset s noblank 2>/dev/null || true
+
 if [ -f /etc/xdg/openbox/menu.xml ]; then
   cp /etc/xdg/openbox/menu.xml "$HOME/.config/openbox/menu.xml"
 fi
 
 openbox >/tmp/openbox.log 2>&1 &
-xterm -geometry 80x24+40+40 >/tmp/xterm.log 2>&1 &
+
+if command -v picom >/dev/null 2>&1; then
+  picom -b --log-file /tmp/picom.log || picom -b >/tmp/picom.log 2>&1 || true
+fi
+
+if command -v tint2 >/dev/null 2>&1; then
+  tint2 -c "$HOME/.config/tint2/tint2rc" >/tmp/tint2.log 2>&1 &
+fi
+
+if command -v pcmanfm >/dev/null 2>&1; then
+  pcmanfm --desktop --profile=default >/tmp/pcmanfm.log 2>&1 &
+else
+  xterm -geometry 80x24+40+40 >/tmp/xterm.log 2>&1 &
+fi
 
 if [ -f /opt/webmcp/bridge/dist/index.js ]; then
   node /opt/webmcp/bridge/dist/index.js >/tmp/bridge.log 2>&1 &

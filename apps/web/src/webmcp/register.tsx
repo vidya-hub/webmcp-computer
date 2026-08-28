@@ -1,13 +1,13 @@
-import { useWorkspace } from "../state/workspace-store.tsx";
+import { useStore } from "../store/index.ts";
 import { MachineTools } from "./MachineTools.tsx";
 import { WorkspaceTools } from "./WorkspaceTools.tsx";
 
 export function ToolsHost() {
-  const { selectedComputer } = useWorkspace();
+  const selected = useStore((s) => s.selectedComputer);
   return (
     <>
       <WorkspaceTools />
-      {selectedComputer ? <MachineTools key={selectedComputer} /> : null}
+      {selected ? <MachineTools /> : null}
     </>
   );
 }

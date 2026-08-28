@@ -1,7 +1,11 @@
-import { useWorkspace } from "../state/workspace-store.tsx";
+import { useShallow } from "zustand/react/shallow";
+import { useStore } from "../store/index.ts";
+import { selectApproval } from "../store/selectors.ts";
 
 export function ApprovalDialog() {
-  const { pendingApproval, resolveApproval, resolveChoice } = useWorkspace();
+  const { pendingApproval, resolveApproval, resolveChoice } = useStore(
+    useShallow(selectApproval),
+  );
   if (!pendingApproval) return null;
   const opts = pendingApproval.options ?? [];
   return (
@@ -49,6 +53,9 @@ export function ApprovalDialog() {
             </button>
           ) : null}
         </div>
+        {opts.length === 0 ? (
+          <div className="sheet-keys">esc — reject&#160;&#160;&#183;&#160;&#160;return — approve</div>
+        ) : null}
       </div>
     </div>
   );

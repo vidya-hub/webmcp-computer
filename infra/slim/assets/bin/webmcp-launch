@@ -1,0 +1,19 @@
+#!/bin/sh
+# Raise an existing normal window by WM_CLASS, or exec the remaining args.
+# Skip sticky desktop -1 and _NET_WM_WINDOW_TYPE_DESKTOP so pcmanfm --desktop
+# is never treated as the Files window.
+set -eu
+class="${1:-}"
+shift
+if [ -n "$class" ] && command -v wmctrl >/dev/null 2>&1; then
+  ids="$(wmctrl -lx 2>/dev/null | awk -v c="$class" 'BEGIN { IGNORECASE = 1 }
+    $2 != "-1" && index(tolower($3), tolower(c)) { print $1 }')" || ids=""
+  for id in $ids; do
+    wt=$(xprop -id "$id" _NET_WM_WINDOW_TYPE 2>/dev/null || true)
+    case "$wt" in
+      *_NET_WM_WINDOW_TYPE_DESKTOP*) continue ;;
+    esac
+    wmctrl -ia "$id" && exit 0
+  done
+fi
+exec "$@"

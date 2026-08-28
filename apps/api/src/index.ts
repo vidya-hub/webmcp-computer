@@ -220,7 +220,8 @@ function desktopProxy(target: string) {
     delete proxyRes.headers["x-frame-options"];
     delete proxyRes.headers["content-security-policy"];
     delete proxyRes.headers["permissions-policy"];
-    proxyRes.headers["permissions-policy"] = "unload=*";
+    proxyRes.headers["origin-agent-cluster"] = "?1";
+    proxyRes.headers["permissions-policy"] = "unload=*, tools=(self)";
   });
   return proxy;
 }

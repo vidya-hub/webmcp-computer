@@ -1,0 +1,119 @@
+# Webmcp in-VNC dock. Panel height 56 + bottom margin 8 = 64, matching
+# Openbox <margins><bottom> in skel openbox/rc.xml. strut_policy=none so
+# the reserved strip is not counted twice. panel_dock=0: do not register
+# as an Openbox dockapp. panel_items=L: pinned launchers only.
+
+#-------------------------------------
+# Backgrounds
+# Background 1: Panel
+rounded = 12
+border_width = 1
+border_sides = TBLR
+border_color = #111111 100
+background_color = #1e1e1e 100
+background_color_hover = #1e1e1e 100
+background_color_pressed = #1e1e1e 100
+border_color_hover = #111111 100
+border_color_pressed = #111111 100
+
+# Background 2: Task default
+rounded = 8
+border_width = 0
+background_color = #111111 0
+border_color = #111111 0
+background_color_hover = #111111 70
+border_color_hover = #111111 0
+background_color_pressed = #111111 100
+border_color_pressed = #111111 0
+
+# Background 3: Task active
+rounded = 8
+border_width = 0
+background_color = #111111 100
+border_color = #111111 0
+background_color_hover = #111111 100
+border_color_hover = #111111 0
+background_color_pressed = #111111 100
+border_color_pressed = #111111 0
+
+# Background 4: Task urgent
+rounded = 8
+border_width = 0
+background_color = #1e1e1e 100
+border_color = #111111 0
+background_color_hover = #1e1e1e 100
+border_color_hover = #111111 0
+background_color_pressed = #1e1e1e 100
+border_color_pressed = #111111 0
+
+#-------------------------------------
+# Panel — launchers only (no taskbar: xterm's default icon is the X11 X).
+panel_items = L
+panel_size = 0 56
+panel_margin = 0 8
+panel_padding = 10 8 10
+panel_background_id = 1
+wm_menu = 0
+panel_dock = 0
+panel_position = bottom center horizontal
+panel_layer = top
+panel_monitor = all
+primary_monitor_first = 0
+panel_shrink = 1
+autohide = 0
+autohide_show_timeout = 0.3
+autohide_hide_timeout = 0.2
+autohide_height = 2
+strut_policy = none
+panel_window_name = tint2
+disable_transparency = 1
+mouse_effects = 1
+font_shadow = 0
+
+#-------------------------------------
+# Launcher
+launcher_padding = 6 4 12
+launcher_background_id = 0
+launcher_icon_background_id = 0
+launcher_icon_size = 40
+launcher_icon_asb = 100 0 0
+launcher_icon_theme_override = 0
+startup_notifications = 0
+launcher_tooltip = 1
+launcher_item_app = /usr/share/webmcp/launchers/Terminal.desktop
+launcher_item_app = /usr/share/webmcp/launchers/Files.desktop
+launcher_item_app = /usr/share/webmcp/launchers/Chromium.desktop
+
+#-------------------------------------
+# Taskbar
+taskbar_mode = single_desktop
+taskbar_hide_if_empty = 1
+taskbar_padding = 2 2 4
+taskbar_background_id = 0
+taskbar_active_background_id = 0
+taskbar_name = 0
+taskbar_hide_inactive_tasks = 0
+taskbar_hide_different_monitor = 0
+taskbar_hide_different_desktop = 0
+taskbar_always_show_all_desktop_tasks = 0
+taskbar_hide_collapsed = 0
+task_icon = 1
+task_text = 0
+task_centered = 1
+task_tooltip = 1
+task_maximum_size = 40 32
+task_padding = 4 4 4
+task_font = Inter 9
+task_font_color = #eeeeee 100
+task_active_font_color = #eeeeee 100
+task_icon_asb = 80 0 0
+task_active_icon_asb = 100 0 0
+task_background_id = 2
+task_active_background_id = 3
+task_urgent_background_id = 4
+task_iconified_background_id = 2
+mouse_left = toggle_iconify
+mouse_middle = none
+mouse_right = close
+mouse_scroll_up = toggle
+mouse_scroll_down = iconify

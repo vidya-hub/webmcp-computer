@@ -1,0 +1,33 @@
+# Webmcp GTK2 — pcmanfm (Files) is GTK2 and ignores gtk-3.0/settings.ini.
+gtk-icon-theme-name = "Webmcp"
+gtk-font-name = "Inter 10"
+gtk-cursor-theme-name = "capitaine-cursors"
+
+style "webmcp-dark"
+{
+  fg[NORMAL]        = "#eeeeee"
+  fg[PRELIGHT]      = "#eeeeee"
+  fg[SELECTED]      = "#eeeeee"
+  fg[ACTIVE]        = "#eeeeee"
+  fg[INSENSITIVE]   = "#7e7e7e"
+
+  bg[NORMAL]        = "#1a1a1a"
+  bg[PRELIGHT]      = "#252525"
+  bg[SELECTED]      = "#da5c2c"
+  bg[ACTIVE]        = "#202020"
+  bg[INSENSITIVE]   = "#141414"
+
+  base[NORMAL]      = "#111111"
+  base[PRELIGHT]    = "#1a1a1a"
+  base[SELECTED]    = "#da5c2c"
+  base[ACTIVE]      = "#da5c2c"
+  base[INSENSITIVE] = "#141414"
+
+  text[NORMAL]      = "#eeeeee"
+  text[PRELIGHT]    = "#eeeeee"
+  text[SELECTED]    = "#eeeeee"
+  text[ACTIVE]      = "#eeeeee"
+  text[INSENSITIVE] = "#7e7e7e"
+}
+
+class "GtkWidget" style "webmcp-dark"

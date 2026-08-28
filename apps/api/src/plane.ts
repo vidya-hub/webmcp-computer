@@ -132,6 +132,7 @@ export class Plane implements ControlPlane {
       status: r.status,
       os: r.os,
       role: r.role,
+      wallpaper: r.wallpaper,
     }));
   }
 
@@ -443,6 +444,7 @@ export class Plane implements ControlPlane {
       status: rec.status,
       os: rec.os,
       role: rec.role,
+      wallpaper: rec.wallpaper,
     };
   }
 

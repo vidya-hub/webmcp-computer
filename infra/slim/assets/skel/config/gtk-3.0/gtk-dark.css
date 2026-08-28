@@ -1,0 +1,131 @@
+/* Webmcp GTK3 dark — overlays Adwaita-dark. Ember accent #da5c2c. */
+
+@define-color accent_color #da5c2c;
+@define-color accent_bg_color #da5c2c;
+@define-color theme_selected_bg_color #da5c2c;
+@define-color theme_selected_fg_color #eeeeee;
+@define-color theme_unfocused_selected_bg_color #c44d22;
+@define-color theme_unfocused_selected_fg_color #eeeeee;
+
+window,
+.background,
+dialog,
+messagedialog,
+.dialog {
+  border-radius: 8px;
+}
+
+popover,
+popover.background,
+.menu,
+menu,
+.csd.popup {
+  border-radius: 8px;
+}
+
+headerbar,
+.titlebar {
+  border-radius: 8px 8px 0 0;
+  background-color: #2c2c2e;
+  color: #ececec;
+}
+
+button {
+  border-radius: 6px;
+  padding: 6px 12px;
+  min-height: 24px;
+}
+
+button.suggested-action {
+  background-image: none;
+  background-color: #da5c2c;
+  color: #eeeeee;
+  border-color: #da5c2c;
+}
+
+button.suggested-action:hover {
+  background-image: none;
+  background-color: #c44d22;
+  color: #eeeeee;
+  border-color: #c44d22;
+}
+
+button.suggested-action:active,
+button.suggested-action:checked {
+  background-image: none;
+  background-color: #a8421e;
+  color: #eeeeee;
+  border-color: #a8421e;
+}
+
+entry,
+spinbutton,
+.entry {
+  background-color: #2c2c2e;
+  color: #ececec;
+  border-radius: 6px;
+  border-color: #3a3a3c;
+  min-height: 28px;
+  padding: 4px 8px;
+}
+
+entry:focus,
+spinbutton:focus,
+.entry:focus {
+  border-color: #da5c2c;
+  box-shadow: 0 0 0 1px #da5c2c;
+}
+
+*:selected,
+*:selected:focus,
+treeview:selected,
+list:selected,
+.view:selected {
+  background-color: #da5c2c;
+  color: #eeeeee;
+}
+
+check:checked,
+radio:checked,
+check:indeterminate,
+radio:indeterminate {
+  background-color: #da5c2c;
+  border-color: #da5c2c;
+  color: #eeeeee;
+}
+
+switch:checked {
+  background-color: #da5c2c;
+}
+
+scrollbar,
+scrollbar contents,
+scrollbar trough {
+  min-width: 8px;
+  min-height: 8px;
+  background-color: transparent;
+  border: none;
+}
+
+scrollbar slider {
+  min-width: 8px;
+  min-height: 8px;
+  margin: 2px;
+  border-radius: 4px;
+  background-color: alpha(#ececec, 0.28);
+  border: none;
+}
+
+scrollbar slider:hover {
+  background-color: alpha(#ececec, 0.42);
+}
+
+tooltip,
+tooltip.background,
+.tooltip {
+  background-color: #2c2c2e;
+  color: #ececec;
+  border-radius: 6px;
+  border: 1px solid #3a3a3c;
+  padding: 6px 10px;
+}

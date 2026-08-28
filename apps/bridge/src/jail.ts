@@ -68,6 +68,11 @@ export function formatBytes(n: number): string {
     const v = Math.round(mb * 10) / 10;
     return `${Number.isInteger(v) ? v.toFixed(0) : v.toFixed(1)}MB`;
   }
+  const kb = n / 1024;
+  if (kb >= 1) {
+    const v = Math.round(kb);
+    return `${v}KB`;
+  }
   return `${Math.max(0, Math.round(n))}B`;
 }
 

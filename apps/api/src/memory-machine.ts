@@ -57,8 +57,8 @@ export class MemoryMachine implements Machine {
       hostname: this.id,
       uptime: Math.floor((Date.now() - this.started) / 1000),
       cpuPercent: 4,
-      memory: { used: "0.2GB", total: "4GB" },
-      disk: { used: "1.0GB", total: "20GB" },
+      memory: { used: "0.2GB", total: "2GB" },
+      disk: { used: "48MB", total: "4GB" },
       foregroundApplication: this.tabs.length > 0 ? "Chromium" : "unknown",
       browserStatus: this.tabs.length > 0 ? "running" : "stopped",
     };

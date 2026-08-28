@@ -11,6 +11,7 @@ export interface Computer {
   status: ComputerStatus;
   os: "Ubuntu 24.04";
   role: string;
+  wallpaper: WallpaperId;
 }
 
 export interface MemoryStat {
@@ -448,6 +449,11 @@ export const WEBMCP_TOOLS = [
 export type WebMcpToolName = (typeof WEBMCP_TOOLS)[number];
 
 export {
+  COMPUTER_CPUS,
+  COMPUTER_DISK_BYTES,
+  COMPUTER_MEMORY,
+  COMPUTER_MEMORY_BYTES,
+  COMPUTER_SHM,
   MAX_COMPUTERS,
   WALLPAPER_CYCLE,
   allocateName,

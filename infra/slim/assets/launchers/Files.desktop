@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+Comment=File manager
+Exec=/usr/share/webmcp/bin/webmcp-launch pcmanfm.real pcmanfm --new-win
+Icon=/usr/share/webmcp/icons/files.png
+Terminal=false
+StartupNotify=false
+StartupWMClass=Pcmanfm.real
+Categories=Utility;FileManager;

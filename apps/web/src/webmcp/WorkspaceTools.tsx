@@ -1,7 +1,7 @@
 import { type ComputerId } from "@webmcp-computer/contract";
 import { useWebMCP } from "usewebmcp";
 import { api, toolResult } from "../api/client.ts";
-import { useWorkspace } from "../state/workspace-store.tsx";
+import { store } from "../store/index.ts";
 
 const EMPTY = {
   type: "object",
@@ -10,9 +10,6 @@ const EMPTY = {
 } as const;
 
 export function WorkspaceTools() {
-  const { computers, selectedComputer, pendingApproval, computersRunning, activity } =
-    useWorkspace();
-
   useWebMCP({
     name: "list_computers",
     description: "List computers in this workspace.",
@@ -23,7 +20,7 @@ export function WorkspaceTools() {
         const data = await api<{ computers: unknown }>("/api/computers");
         return toolResult(data);
       } catch {
-        return toolResult({ computers });
+        return toolResult({ computers: store.getState().computers });
       }
     },
   });
@@ -37,12 +34,13 @@ export function WorkspaceTools() {
       try {
         return toolResult(await api("/api/workspace"));
       } catch {
+        const s = store.getState();
         return toolResult({
-          selectedComputer,
-          pendingApproval,
-          computersRunning,
+          selectedComputer: s.selectedComputer,
+          pendingApproval: s.pendingApproval,
+          computersRunning: s.computersRunning,
           mode: "live",
-          activityHead: activity,
+          activityHead: s.activity,
         });
       }
     },

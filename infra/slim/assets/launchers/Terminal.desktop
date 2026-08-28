@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Terminal
+Comment=Terminal emulator
+Exec=/usr/share/webmcp/bin/webmcp-launch XTerm xterm
+Icon=/usr/share/webmcp/icons/terminal.png
+Terminal=false
+StartupNotify=false
+StartupWMClass=XTerm
+Categories=System;TerminalEmulator;

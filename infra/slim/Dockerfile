@@ -11,6 +11,9 @@ RUN apt-get update \
     ca-certificates \
     chromium \
     curl \
+    e2fsprogs \
+    fuse3 \
+    fuse2fs \
     file \
     fonts-dejavu-core \
     git \
@@ -19,13 +22,16 @@ RUN apt-get update \
     novnc \
     openbox \
     pcmanfm \
+    picom \
     python3 \
     ripgrep \
     scrot \
     sudo \
     tigervnc-standalone-server \
+    tint2 \
     unzip \
     websockify \
+    wmctrl \
     x11-utils \
     x11-xserver-utils \
     xdotool \
@@ -37,7 +43,8 @@ RUN apt-get update \
     > /etc/chromium/policies/managed/default_managed_policy.json \
   && printf '%s\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 --no-first-run --no-default-browser-check"' \
     > /etc/chromium.d/webmcp \
-  && if [ -f /usr/share/novnc/vnc.html ]; then ln -sf vnc.html /usr/share/novnc/index.html; fi
+  && if [ -f /usr/share/novnc/vnc.html ]; then ln -sf vnc.html /usr/share/novnc/index.html; fi \
+  && mv /usr/bin/pcmanfm /usr/bin/pcmanfm.real
 
 RUN NODE_VER=22.14.0 \
   && ARCH="$(dpkg --print-architecture)" \
@@ -69,7 +76,101 @@ RUN cd /opt/webmcp/bridge \
   && chmod -R a+rX /opt/webmcp \
   && chown -R 1000:1000 /home/kasm-user /opt/webmcp
 
+COPY infra/slim/pcmanfm-wrapper.sh /usr/bin/pcmanfm
 COPY infra/slim/openbox/menu.xml /etc/xdg/openbox/menu.xml
+COPY infra/slim/openbox/themes /usr/share/themes
+COPY infra/slim/assets /tmp/webmcp-assets
+RUN set -eu \
+  && chmod 755 /usr/bin/pcmanfm \
+  && for f in terminal files chromium project; do \
+       test -f "/tmp/webmcp-assets/icons/$f.png" \
+       || { echo "missing asset: infra/slim/assets/icons/$f.png — see infra/slim/assets/IMAGEGEN_HANDOVER.md" >&2; exit 1; }; \
+     done \
+  && for f in Terminal Files Chromium; do \
+       test -f "/tmp/webmcp-assets/launchers/${f}.desktop" \
+       || { echo "missing launcher: infra/slim/assets/launchers/${f}.desktop" >&2; exit 1; }; \
+     done \
+  && for f in void carbon dark-grid arrows; do \
+       test -f "/tmp/webmcp-assets/wallpapers/$f.png" \
+       || { echo "missing asset: infra/slim/assets/wallpapers/$f.png — see infra/slim/assets/IMAGEGEN_HANDOVER.md" >&2; exit 1; }; \
+     done \
+  && test -f /tmp/webmcp-assets/bin/webmcp-launch \
+       || { echo "missing infra/slim/assets/bin/webmcp-launch" >&2; exit 1; } \
+  && test -f /tmp/webmcp-assets/bin/webmcp-df \
+       || { echo "missing infra/slim/assets/bin/webmcp-df" >&2; exit 1; } \
+  && mkdir -p /usr/share/backgrounds/webmcp /usr/share/webmcp/icons \
+       /usr/share/webmcp/launchers /usr/share/webmcp/bin \
+  && cp /tmp/webmcp-assets/wallpapers/*.png /usr/share/backgrounds/webmcp/ \
+  && cp /tmp/webmcp-assets/icons/*.png /usr/share/webmcp/icons/ \
+  && if [ -f /tmp/webmcp-assets/icons/terminal.xpm ]; then \
+       cp /tmp/webmcp-assets/icons/terminal.xpm /usr/share/webmcp/icons/; \
+     fi \
+  && cp /tmp/webmcp-assets/launchers/*.desktop /usr/share/webmcp/launchers/ \
+  && chmod 644 /usr/share/webmcp/launchers/*.desktop \
+  && cp /tmp/webmcp-assets/bin/webmcp-launch /usr/share/webmcp/bin/webmcp-launch \
+  && chmod 755 /usr/share/webmcp/bin/webmcp-launch \
+  && cp /tmp/webmcp-assets/bin/webmcp-df /usr/local/bin/df \
+  && chmod 755 /usr/local/bin/df \
+  && if [ -f /etc/fuse.conf ]; then \
+       grep -q '^user_allow_other' /etc/fuse.conf \
+         || printf '\nuser_allow_other\n' >> /etc/fuse.conf; \
+     else \
+       printf 'user_allow_other\n' > /etc/fuse.conf; \
+     fi \
+  && { test -f /usr/share/icons/hicolor/48x48/apps/chromium.png \
+       || test -f /usr/share/pixmaps/chromium.png \
+       || { echo "missing packaged chromium icon" >&2; exit 1; }; } \
+  && cp -r /tmp/webmcp-assets/skel /usr/share/webmcp/skel \
+  && mkdir -p /usr/share/fonts/truetype/inter /usr/share/fonts/truetype/jetbrains-mono \
+  && if ls /tmp/webmcp-assets/fonts/inter/*.ttf >/dev/null 2>&1; then \
+       cp /tmp/webmcp-assets/fonts/inter/*.ttf /usr/share/fonts/truetype/inter/; \
+     else \
+       echo "warning: Inter fonts missing from infra/slim/assets/fonts/inter/" >&2; \
+     fi \
+  && if ls /tmp/webmcp-assets/fonts/jetbrains-mono/*.ttf >/dev/null 2>&1; then \
+       cp /tmp/webmcp-assets/fonts/jetbrains-mono/*.ttf /usr/share/fonts/truetype/jetbrains-mono/; \
+     else \
+       echo "warning: JetBrains Mono missing from infra/slim/assets/fonts/jetbrains-mono/" >&2; \
+     fi \
+  && fc-cache -f \
+  && if [ -d /tmp/webmcp-assets/cursors/capitaine-cursors/cursors ]; then \
+       mkdir -p /usr/share/icons; \
+       cp -a /tmp/webmcp-assets/cursors/capitaine-cursors /usr/share/icons/; \
+     else \
+       echo "warning: capitaine-cursors missing from infra/slim/assets/cursors/" >&2; \
+     fi \
+  && mkdir -p /usr/share/icons/Webmcp \
+  && if [ -f /tmp/webmcp-assets/file-icons/theme/index.theme ]; then \
+       cp -a /tmp/webmcp-assets/file-icons/theme/. /usr/share/icons/Webmcp/; \
+     else \
+       echo "warning: Webmcp icon theme index.theme missing" >&2; \
+     fi \
+  && for name in folder inode-directory user-home user-desktop computer drive-harddisk \
+       user-trash network-workgroup text-x-generic application-x-executable \
+       image-x-generic audio-x-generic video-x-generic application-pdf \
+       application-x-archive go-previous go-next go-up go-home view-refresh \
+       system-search edit-cut edit-copy edit-paste edit-delete folder-new \
+       document-new tab-new; do \
+       if ! find /usr/share/icons/Webmcp -name "${name}.png" 2>/dev/null | grep -q .; then \
+         echo "warning: missing Webmcp icon: ${name}.png — see infra/slim/assets/IMAGEGEN_HANDOVER.md (GTK will fall back)" >&2; \
+       fi; \
+     done \
+  && mkdir -p /usr/share/themes/Adwaita/gtk-3.0 \
+  && printf '%s\n' \
+       '@import url("resource:///org/gtk/libgtk/theme/Adwaita/gtk-contained.css");' \
+       '@import url("file:///usr/share/webmcp/skel/config/gtk-3.0/gtk.css");' \
+       > /usr/share/themes/Adwaita/gtk-3.0/gtk.css \
+  && printf '%s\n' \
+       '@import url("resource:///org/gtk/libgtk/theme/Adwaita/gtk-contained-dark.css");' \
+       '@import url("file:///usr/share/webmcp/skel/config/gtk-3.0/gtk-dark.css");' \
+       > /usr/share/themes/Adwaita/gtk-3.0/gtk-dark.css \
+  && chmod -R a+rX /usr/share/backgrounds/webmcp /usr/share/webmcp \
+      /usr/share/themes/WebmcpDark /usr/share/themes/WebmcpLight \
+      /usr/share/themes/Adwaita /usr/share/icons/Webmcp \
+      /usr/share/fonts/truetype/inter /usr/share/fonts/truetype/jetbrains-mono \
+  && chown 1000:1000 /usr/share/webmcp/launchers \
+  && if [ -d /usr/share/icons/capitaine-cursors ]; then chmod -R a+rX /usr/share/icons/capitaine-cursors; fi \
+  && rm -rf /tmp/webmcp-assets
 COPY infra/slim/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY infra/slim/session.sh /usr/local/bin/session.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/session.sh

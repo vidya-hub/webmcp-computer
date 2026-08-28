@@ -1,0 +1,31 @@
+! webmcp-computer — readable dark terminal, ember red
+xterm*faceName: JetBrains Mono
+xterm*faceSize: 11
+xterm*background: #111111
+xterm*foreground: #eeeeee
+xterm*cursorColor: #eeeeee
+xterm*scrollBar: false
+xterm*borderWidth: 0
+xterm*internalBorder: 12
+xterm*saveLines: 2000
+xterm*utf8: 1
+xterm*termName: xterm-256color
+xterm*iconHint: /usr/share/webmcp/icons/terminal.png
+xterm*color0:  #000000
+xterm*color1:  #da5c2c
+xterm*color2:  #6a9f6a
+xterm*color3:  #c4a35a
+xterm*color4:  #6a8caf
+xterm*color5:  #a87ca0
+xterm*color6:  #5e9a96
+xterm*color7:  #d9d9d9
+xterm*color8:  #202020
+xterm*color9:  #da5c2c
+xterm*color10: #6a9f6a
+xterm*color11: #c4a35a
+xterm*color12: #6a8caf
+xterm*color13: #a87ca0
+xterm*color14: #5e9a96
+xterm*color15: #eeeeee
+Xcursor.theme: capitaine-cursors
+Xcursor.size: 24

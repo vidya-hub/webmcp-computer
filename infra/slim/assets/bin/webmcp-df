@@ -1,0 +1,47 @@
+#!/bin/sh
+# Show the 4G home quota as / instead of the host VM overlay (~98G).
+REAL=/usr/bin/df
+MNT=/var/lib/webmcp/home
+if [ ! -x "$REAL" ]; then
+  REAL=/bin/df
+fi
+if [ ! -d "$MNT" ] || ! grep -q " ${MNT} " /proc/mounts 2>/dev/null; then
+  exec "$REAL" "$@"
+fi
+
+human=0
+inode=0
+paths=""
+for a in "$@"; do
+  case "$a" in
+    -h|-H|--human-readable) human=1 ;;
+    -i|--inodes) inode=1 ;;
+    -*) ;;
+    *) paths="$paths $a" ;;
+  esac
+done
+
+if [ "$inode" = 1 ]; then
+  exec "$REAL" "$@"
+fi
+
+if [ -n "$paths" ]; then
+  only_root=1
+  for p in $paths; do
+    case "$p" in
+      /|/home|/*) ;;
+      *) only_root=0 ;;
+    esac
+  done
+  if [ "$only_root" != 1 ]; then
+    exec "$REAL" "$@"
+  fi
+fi
+
+if [ "$human" = 1 ]; then
+  "$REAL" -h "$MNT" | awk 'NR==1 { print; next } { $NF="/"; print }'
+  "$REAL" -h /dev/shm 2>/dev/null | awk 'NR>1' || true
+else
+  "$REAL" -P "$MNT" | awk 'NR==1 { print; next } { $NF="/"; print }'
+fi
+exit 0

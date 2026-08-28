@@ -1,0 +1,36 @@
+[Icon Theme]
+Name=Webmcp
+Comment=Minimal XDG icon theme for webmcp-computer
+Inherits=hicolor
+Example=folder
+Directories=places/48,places/24,mimetypes/48,mimetypes/24,actions/48,actions/24
+
+[places/48]
+Size=48
+Context=Places
+Type=Fixed
+
+[places/24]
+Size=24
+Context=Places
+Type=Fixed
+
+[mimetypes/48]
+Size=48
+Context=MimeTypes
+Type=Fixed
+
+[mimetypes/24]
+Size=24
+Context=MimeTypes
+Type=Fixed
+
+[actions/48]
+Size=48
+Context=Actions
+Type=Fixed
+
+[actions/24]
+Size=24
+Context=Actions
+Type=Fixed

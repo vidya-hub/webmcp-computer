@@ -123,6 +123,16 @@ test("POST /act via hono", async () => {
   assert.equal(body.content, "ok");
 });
 
+test("snapshot reports assigned memory and disk quotas", async () => {
+  process.env.WEBMCP_MEMORY_BYTES = String(2 * 1024 ** 3);
+  process.env.WEBMCP_DISK_BYTES = String(4 * 1024 ** 3);
+  const s = await machine().snapshot();
+  assert.equal(s.memory.total, "2GB");
+  assert.equal(s.disk.total, "4GB");
+  assert.match(s.memory.used, /^\d+(\.\d)?(KB|MB|GB|B)$/);
+  assert.match(s.disk.used, /^\d+(\.\d)?(KB|MB|GB|B)$/);
+});
+
 test("json appearance on laptop", async () => {
   const m = machine();
   const set = await m.setWallpaper("dark-grid");

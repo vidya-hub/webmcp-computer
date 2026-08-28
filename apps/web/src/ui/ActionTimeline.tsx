@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { TapeEvent } from "@webmcp-computer/contract";
 import { api } from "../api/client.ts";
 
 type Props = { open: boolean; onClose: () => void };
+
+const SEEN_KEY = "webmcp.tl-seen";
 
 function dump(v: unknown): string {
   if (v === undefined || v === null) return "";
@@ -28,6 +30,27 @@ export function ActionTimeline({ open, onClose }: Props) {
   const [filter, setFilter] = useState<string>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<string | null>(null);
+  const [seenAt, setSeenAt] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      try {
+        setSeenAt(localStorage.getItem(SEEN_KEY));
+      } catch {
+        setSeenAt(null);
+      }
+      return;
+    }
+    if (events.length > 0) {
+      const latest = events.reduce((m, e) => (e.at > m ? e.at : m), "");
+      try {
+        localStorage.setItem(SEEN_KEY, latest);
+      } catch {
+        /* private mode */
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -117,11 +140,14 @@ export function ActionTimeline({ open, onClose }: Props) {
               {rows.length === 0 ? (
                 <div className="tl-empty">nothing on this computer</div>
               ) : (
-                rows.map((e) => (
+                rows.map((e, i) => (
                   <button
                     key={e.id}
                     type="button"
-                    className={`tl-row${selected?.id === e.id ? " on" : ""}`}
+                    style={{ animationDelay: `${Math.min(i, 14) * 30}ms` }}
+                    className={`tl-row${selected?.id === e.id ? " on" : ""}${
+                      seenAt && e.at > seenAt ? " fresh" : ""
+                    }`}
                     onClick={() => setSelectedId(e.id)}
                   >
                     <span className="tl-time">{clock(e.at)}</span>
@@ -145,20 +171,28 @@ export function ActionTimeline({ open, onClose }: Props) {
                       {selected.error ? " · error" : ""}
                     </div>
                   </div>
-                  <div className="tl-shots">
-                    <Shot
-                      label="before"
-                      ok={selected.before}
-                      src={`/api/tape/${selected.id}/before`}
+                  {selected.before && selected.after ? (
+                    <Compare
+                      before={`/api/tape/${selected.id}/before`}
+                      after={`/api/tape/${selected.id}/after`}
                       onOpen={setLightbox}
                     />
-                    <Shot
-                      label="after"
-                      ok={selected.after}
-                      src={`/api/tape/${selected.id}/after`}
-                      onOpen={setLightbox}
-                    />
-                  </div>
+                  ) : (
+                    <div className="tl-shots">
+                      <Shot
+                        label="before"
+                        ok={selected.before}
+                        src={`/api/tape/${selected.id}/before`}
+                        onOpen={setLightbox}
+                      />
+                      <Shot
+                        label="after"
+                        ok={selected.after}
+                        src={`/api/tape/${selected.id}/after`}
+                        onOpen={setLightbox}
+                      />
+                    </div>
+                  )}
                   <Io title="Input" text={dump(selected.input) || "—"} />
                   <Io
                     title="Output"
@@ -186,6 +220,55 @@ export function ActionTimeline({ open, onClose }: Props) {
           <img src={lightbox} alt="" />
         </button>
       ) : null}
+    </div>
+  );
+}
+
+function Compare({
+  before,
+  after,
+  onOpen,
+}: {
+  before: string;
+  after: string;
+  onOpen: (src: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState(0.5);
+
+  function start(e: React.PointerEvent) {
+    e.preventDefault();
+    const move = (ev: PointerEvent) => {
+      const r = ref.current?.getBoundingClientRect();
+      if (!r) return;
+      setPos(Math.min(0.98, Math.max(0.02, (ev.clientX - r.left) / r.width)));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    move(e.nativeEvent);
+  }
+
+  return (
+    <div
+      className="tl-compare"
+      ref={ref}
+      onPointerDown={start}
+      onDoubleClick={() => onOpen(after)}
+      title="drag to compare · double-click to enlarge"
+    >
+      <img src={before} alt="before" draggable={false} />
+      <div className="after" style={{ clipPath: `inset(0 0 0 ${pos * 100}%)` }}>
+        <img src={after} alt="after" draggable={false} />
+      </div>
+      <span className="tag before">before</span>
+      <span className="tag after">after</span>
+      <div className="divider" style={{ left: `${pos * 100}%` }} />
     </div>
   );
 }

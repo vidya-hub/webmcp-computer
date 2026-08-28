@@ -37,6 +37,13 @@ export const WALLPAPER_CYCLE = [
 
 export const MAX_COMPUTERS = 4;
 
+/** Per-computer cgroup / advertised quota. Overlay image layers are shared. */
+export const COMPUTER_MEMORY = "2g";
+export const COMPUTER_MEMORY_BYTES = 2 * 1024 ** 3;
+export const COMPUTER_DISK_BYTES = 4 * 1024 ** 3;
+export const COMPUTER_SHM = "64m";
+export const COMPUTER_CPUS = "1.5";
+
 export function slugifyName(raw: string): string | null {
   const slug = raw
     .toLowerCase()

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Chromium
+Comment=Web browser
+Exec=/usr/share/webmcp/bin/webmcp-launch Chromium-browser chromium
+Icon=/usr/share/webmcp/icons/chromium.png
+Terminal=false
+StartupNotify=false
+StartupWMClass=Chromium-browser
+Categories=Network;WebBrowser;

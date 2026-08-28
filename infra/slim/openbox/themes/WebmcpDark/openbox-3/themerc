@@ -1,0 +1,127 @@
+# WebmcpDark — macOS-like dark chrome for webmcp-computer
+# Surfaces: window #1e1e1e, titlebar #2c2c2e / inactive #242426
+# Text: #ececec / #8e8e93. Traffic lights: #ff5f57 #febc2e #28c840
+# Borderless; picom draws rounded corners and shadows.
+
+# ---- geometry ----
+border.width: 0
+padding.width: 6
+padding.height: 6
+window.handle.width: 3
+window.client.padding.width: 0
+window.client.padding.height: 0
+window.button.spacing: 8
+
+# ---- borders / handle (invisible 3px bottom resize grip) ----
+window.active.border.color: #2c2c2e
+window.inactive.border.color: #242426
+menu.border.width: 0
+menu.border.color: #1e1e1e
+osd.border.width: 0
+osd.border.color: #2c2c2e
+
+window.active.client.color: #1e1e1e
+window.inactive.client.color: #1e1e1e
+window.active.handle.bg: flat solid
+window.active.handle.bg.color: #1e1e1e
+window.inactive.handle.bg: flat solid
+window.inactive.handle.bg.color: #1e1e1e
+window.active.grip.bg: parentrelative
+window.inactive.grip.bg: parentrelative
+
+# ---- titlebar ----
+window.label.text.justify: Center
+window.active.title.bg: flat solid
+window.active.title.bg.color: #2c2c2e
+window.inactive.title.bg: flat solid
+window.inactive.title.bg.color: #242426
+window.active.label.bg: parentrelative
+window.active.label.text.color: #ececec
+window.inactive.label.bg: parentrelative
+window.inactive.label.text.color: #8e8e93
+
+# ---- traffic lights: parent-relative tiles, color via image.color ----
+# hover = 15% darker, pressed = 30% darker; inactive = #55555a
+window.active.button.unpressed.bg: parentrelative
+window.active.button.hover.bg: parentrelative
+window.active.button.pressed.bg: parentrelative
+window.active.button.disabled.bg: parentrelative
+window.inactive.button.unpressed.bg: parentrelative
+window.inactive.button.hover.bg: parentrelative
+window.inactive.button.pressed.bg: parentrelative
+window.inactive.button.disabled.bg: parentrelative
+
+window.active.button.unpressed.image.color: #55555a
+window.active.button.hover.image.color: #48484d
+window.active.button.pressed.image.color: #3b3b3f
+window.active.button.disabled.image.color: #3b3b3f
+window.inactive.button.unpressed.image.color: #55555a
+window.inactive.button.hover.image.color: #48484d
+window.inactive.button.pressed.image.color: #3b3b3f
+window.inactive.button.disabled.image.color: #3b3b3f
+
+# close — #ff5f57
+window.active.button.close.unpressed.image.color: #ff5f57
+window.active.button.close.hover.image.color: #d9514a
+window.active.button.close.pressed.image.color: #b2423d
+window.active.button.close.disabled.image.color: #55555a
+window.inactive.button.close.unpressed.image.color: #55555a
+window.inactive.button.close.hover.image.color: #d9514a
+window.inactive.button.close.pressed.image.color: #b2423d
+window.inactive.button.close.disabled.image.color: #3b3b3f
+
+# iconify — #febc2e
+window.active.button.iconify.unpressed.image.color: #febc2e
+window.active.button.iconify.hover.image.color: #d8a027
+window.active.button.iconify.pressed.image.color: #b28420
+window.active.button.iconify.disabled.image.color: #55555a
+window.inactive.button.iconify.unpressed.image.color: #55555a
+window.inactive.button.iconify.hover.image.color: #d8a027
+window.inactive.button.iconify.pressed.image.color: #b28420
+window.inactive.button.iconify.disabled.image.color: #3b3b3f
+
+# maximize — #28c840
+window.active.button.max.unpressed.image.color: #28c840
+window.active.button.max.hover.image.color: #22aa36
+window.active.button.max.pressed.image.color: #1c8c2d
+window.active.button.max.disabled.image.color: #55555a
+window.inactive.button.max.unpressed.image.color: #55555a
+window.inactive.button.max.hover.image.color: #22aa36
+window.inactive.button.max.pressed.image.color: #1c8c2d
+window.inactive.button.max.disabled.image.color: #3b3b3f
+window.active.button.max.toggled.unpressed.image.color: #28c840
+window.active.button.max.toggled.hover.image.color: #22aa36
+window.active.button.max.toggled.pressed.image.color: #1c8c2d
+window.inactive.button.max.toggled.unpressed.image.color: #55555a
+window.inactive.button.max.toggled.hover.image.color: #22aa36
+window.inactive.button.max.toggled.pressed.image.color: #1c8c2d
+
+# ---- menu ----
+menu.title.bg: flat solid
+menu.title.bg.color: #1e1e1e
+menu.title.text.color: #ececec
+menu.title.text.justify: Left
+menu.items.bg: flat solid
+menu.items.bg.color: #1e1e1e
+menu.items.text.color: #ececec
+menu.items.disabled.text.color: #8e8e93
+menu.items.active.bg: flat solid
+menu.items.active.bg.color: #2c2c2e
+menu.items.active.text.color: #ececec
+menu.separator.color: #2c2c2e
+menu.separator.width: 1
+menu.separator.padding.width: 6
+menu.separator.padding.height: 4
+menu.overlap.x: 0
+menu.overlap.y: 0
+menu.bullet.image.color: #8e8e93
+
+# ---- on-screen display ----
+osd.bg: flat solid
+osd.bg.color: #1e1e1e
+osd.label.bg: parentrelative
+osd.label.text.color: #ececec
+osd.hilight.bg: flat solid
+osd.hilight.bg.color: #da5c2c
+osd.unhilight.bg: flat solid
+osd.unhilight.bg.color: #2c2c2e

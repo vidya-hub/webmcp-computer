@@ -1,7 +1,7 @@
 import { type MachineOp } from "@webmcp-computer/contract";
 import { useWebMCP } from "usewebmcp";
 import { api, toolResult } from "../api/client.ts";
-import { useWorkspace } from "../state/workspace-store.tsx";
+import { store } from "../store/index.ts";
 
 const EMPTY = {
   type: "object",
@@ -37,10 +37,8 @@ function verbFor(op: MachineOp): string {
 }
 
 export function MachineTools() {
-  const { beginAct, endAct } = useWorkspace();
-
   async function act(op: MachineOp) {
-    beginAct(verbFor(op));
+    store.getState().beginAct(verbFor(op));
     try {
       const data = await api("/api/act", {
         method: "POST",
@@ -61,7 +59,7 @@ export function MachineTools() {
       }
       return toolResult(data);
     } finally {
-      endAct();
+      store.getState().endAct();
     }
   }
 

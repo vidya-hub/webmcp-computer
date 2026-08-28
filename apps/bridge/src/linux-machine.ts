@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
+  COMPUTER_DISK_BYTES,
+  COMPUTER_MEMORY_BYTES,
   isDetachedCommand,
   type Appearance,
   type BrowserState,
@@ -51,6 +53,48 @@ import {
 const execFileAsync = promisify(execFile);
 const READ_CAP = 256 * 1024;
 
+function readUintFile(file: string): number | null {
+  try {
+    const raw = fs.readFileSync(file, "utf8").trim();
+    if (!raw || raw === "max") return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return null;
+    // cgroup v1 "no limit" is a huge sentinel
+    if (n > 1e15) return null;
+    return n;
+  } catch {
+    return null;
+  }
+}
+
+function assignedBytes(envName: string, fallback: number): number {
+  const n = Number(process.env[envName]);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function memoryUsage(): { used: number; total: number } {
+  const total = assignedBytes("WEBMCP_MEMORY_BYTES", COMPUTER_MEMORY_BYTES);
+  const used =
+    readUintFile("/sys/fs/cgroup/memory.current") ??
+    readUintFile("/sys/fs/cgroup/memory/memory.usage_in_bytes") ??
+    Math.max(0, os.totalmem() - os.freemem());
+  return { used: Math.min(used, total), total };
+}
+
+async function diskUsage(): Promise<{ used: number; total: number }> {
+  const total = assignedBytes("WEBMCP_DISK_BYTES", COMPUTER_DISK_BYTES);
+  let used = 0;
+  try {
+    const { stdout } = await execFileAsync("du", ["-sk", ensureJail()], {
+      timeout: 4000,
+    });
+    used = Number(stdout.trim().split(/\s+/)[0] ?? 0) * 1024;
+  } catch {
+    /* jail empty or du missing */
+  }
+  return { used: Math.min(Math.max(0, used), total), total };
+}
+
 function cpuTimes(): { idle: number; total: number } {
   let idle = 0;
   let total = 0;
@@ -79,21 +123,8 @@ export class LinuxMachine implements Machine {
   ) {}
 
   async snapshot(): Promise<ComputerState> {
-    const total = os.totalmem();
-    const used = total - os.freemem();
-    let disk = { used: "0GB", total: "0GB" };
-    try {
-      const { stdout } = await execFileAsync("df", ["-k", ensureJail()], {
-        timeout: 3000,
-      });
-      const line = stdout.trim().split("\n")[1];
-      const cols = line?.split(/\s+/) ?? [];
-      const t = Number(cols[1] ?? 0) * 1024;
-      const u = Number(cols[2] ?? 0) * 1024;
-      disk = { used: formatBytes(u), total: formatBytes(t) };
-    } catch {
-      /* */
-    }
+    const mem = memoryUsage();
+    const diskRaw = await diskUsage();
     let foreground = "unknown";
     try {
       const { stdout } = await execFileAsync(
@@ -113,10 +144,19 @@ export class LinuxMachine implements Machine {
       name: this.machineName,
       os: "Ubuntu 24.04",
       hostname: hostname(),
-      uptime: os.uptime(),
+      uptime: (() => {
+        try {
+          return os.uptime();
+        } catch {
+          return 0;
+        }
+      })(),
       cpuPercent: await cpuSample(),
-      memory: { used: formatBytes(used), total: formatBytes(total) },
-      disk,
+      memory: { used: formatBytes(mem.used), total: formatBytes(mem.total) },
+      disk: {
+        used: formatBytes(diskRaw.used),
+        total: formatBytes(diskRaw.total),
+      },
       foregroundApplication: foreground,
       browserStatus: (await cdpAlive()) ? "running" : "stopped",
     };
