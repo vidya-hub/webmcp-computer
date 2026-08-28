@@ -1,0 +1,26 @@
+# Dedicated Postgres for webmcp-computer (action tape + metadata).
+# Bound to host loopback only; the API (host systemd service) connects via 127.0.0.1.
+name: webmcp-computer
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: webmcp-computer-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: webmcp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+      POSTGRES_DB: webmcp
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - webmcp-computer-pgdata:/var/lib/postgresql/data
+      - ./db/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U webmcp -d webmcp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  webmcp-computer-pgdata:
+    name: webmcp-computer-pgdata
