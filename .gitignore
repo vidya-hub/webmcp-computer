@@ -7,3 +7,4 @@ tmp-jail
 .env.local
 data/tape
 **/data/tape
+deploy/.env
