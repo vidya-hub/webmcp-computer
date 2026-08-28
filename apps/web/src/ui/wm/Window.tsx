@@ -1,4 +1,3 @@
-import { Copy, Minus, Square, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type { Computer } from "@webmcp-computer/contract";
 
@@ -121,6 +120,7 @@ export function WindowFrame({
       }}
       onPointerDown={() => onFocus()}
     >
+      <div className="wm-chrome">
       <div
         className="wm-title"
         onPointerDown={(e) => pointerDrag(e, "move")}
@@ -129,57 +129,46 @@ export function WindowFrame({
           onMaximize();
         }}
       >
-        <span className="wm-title-id">
-          <span className={running ? "wm-dot on" : "wm-dot"}>{running ? "●" : "○"}</span>
-          {computer.name}
-        </span>
-        {acting && actingVerb ? (
-          <span className="wm-acting">AGENT  {actingVerb}</span>
-        ) : computer.status === "starting" ? (
-          <span className="wm-acting">starting</span>
-        ) : null}
-        <span className="wm-controls">
+        <span className="wm-lights">
           <button
             type="button"
-            className="wm-btn"
-            aria-label="minimize"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onMinimize();
-            }}
-          >
-            <Minus size={12} strokeWidth={2} />
-          </button>
-          <button
-            type="button"
-            className="wm-btn"
-            aria-label={maximized ? "restore" : "maximize"}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onMaximize();
-            }}
-          >
-            {maximized ? (
-              <Copy size={11} strokeWidth={2} />
-            ) : (
-              <Square size={11} strokeWidth={2} />
-            )}
-          </button>
-          <button
-            type="button"
-            className="wm-btn wm-btn-close"
+            className="wm-light close"
             aria-label="close"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               onClose();
             }}
-          >
-            <X size={12} strokeWidth={2} />
-          </button>
+          />
+          <button
+            type="button"
+            className="wm-light min"
+            aria-label="minimize"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onMinimize();
+            }}
+          />
+          <button
+            type="button"
+            className="wm-light max"
+            aria-label={maximized ? "restore" : "maximize"}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onMaximize();
+            }}
+          />
         </span>
+        <span className="wm-title-id">{computer.name}</span>
+        {acting && actingVerb ? (
+          <span className="wm-acting">AGENT  {actingVerb}</span>
+        ) : computer.status === "starting" ? (
+          <span className="wm-acting">starting</span>
+        ) : running ? null : (
+          <span className="wm-acting">{computer.status}</span>
+        )}
       </div>
       <div className="wm-body" ref={bodyRef}>
         {!selected && !dragActive ? (
@@ -196,6 +185,7 @@ export function WindowFrame({
           style={ice ? { width: ice.w, height: ice.h } : undefined}
           src={`/desktops/${encodeURIComponent(computer.id)}/?v=rfb`}
         />
+      </div>
       </div>
       {maximized ? null : (
         <>

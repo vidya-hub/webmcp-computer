@@ -7,6 +7,7 @@ import {
   type Computer,
   type ComputerId,
   type ControlPlane,
+  type Machine,
   type MachineOp,
   type SpawnSpec,
   type WorkspaceState,
@@ -14,6 +15,7 @@ import {
 } from "@webmcp-computer/contract";
 import { HttpError } from "./http-error.ts";
 import type { ComputerHost } from "./host.ts";
+import { appendEvent, putShot } from "./tape-store.ts";
 
 const ACTIVITY_CAP = 100;
 const APPROVAL_MS = 120_000;
@@ -33,6 +35,65 @@ const READ_OPS = new Set<MachineOp["op"]>([
   "listPorts",
   "devServers",
 ]);
+
+const TAPE_OPS = new Set<MachineOp["op"]>([
+  "writeFile",
+  "run",
+  "setWallpaper",
+  "setTheme",
+  "openUrl",
+  "focusWindow",
+  "launchApp",
+  "mouseClick",
+  "mouseDrag",
+  "scroll",
+  "typeText",
+  "key",
+  "selectAll",
+  "createDirectory",
+  "moveFile",
+  "deleteFile",
+  "createTab",
+  "selectTab",
+  "closeTab",
+  "reloadTab",
+  "clickSelector",
+  "killProcess",
+  "installPackage",
+]);
+
+const BROWSER_SHOT_OPS = new Set<MachineOp["op"]>([
+  "openUrl",
+  "createTab",
+  "selectTab",
+  "closeTab",
+  "reloadTab",
+  "clickSelector",
+  "browserScreenshot",
+]);
+
+async function grabShot(machine: Machine, browser: boolean) {
+  try {
+    const shot = browser
+      ? await machine.browserScreenshot(true)
+      : await machine.screenshot();
+    if (!shot.data) return null;
+    return Buffer.from(shot.data, "base64");
+  } catch {
+    return null;
+  }
+}
+
+function capJson(value: unknown, max = 8000): unknown {
+  try {
+    const s = JSON.stringify(value);
+    if (!s || s === "{}") return undefined;
+    if (s.length <= max) return value;
+    return { truncated: true, preview: s.slice(0, max) };
+  } catch {
+    return undefined;
+  }
+}
 
 type Listener = (event: WsEvent) => void;
 
@@ -61,13 +122,6 @@ export class Plane implements ControlPlane {
   }
 
   async boot(): Promise<void> {
-    if (this.host.list().length === 0) {
-      const { record } = await this.host.spawn({});
-      this.selected = record.id;
-      this.pushActivity("system", record.id, "spawned", record.id);
-      this.emit({ type: "computer", computer: record });
-      return;
-    }
     this.selected = this.host.list()[0]?.id ?? null;
   }
 
@@ -105,6 +159,10 @@ export class Plane implements ControlPlane {
   async spawn(spec: SpawnSpec, actor: Actor): Promise<Computer> {
     const { record } = await this.host.spawn(spec);
     this.pushActivity(actor, record.id, "spawned", record.id);
+    if (!this.selected) {
+      this.selected = record.id;
+      this.emit({ type: "selection", computerId: record.id });
+    }
     this.emit({ type: "computer", computer: record });
     return record;
   }
@@ -140,14 +198,7 @@ export class Plane implements ControlPlane {
     if (this.selected === id) {
       this.selected = this.host.list()[0]?.id ?? null;
     }
-    if (this.host.list().length === 0) {
-      const { record } = await this.host.spawn({});
-      this.selected = record.id;
-      this.pushActivity("system", record.id, "spawned", record.id);
-      this.emit({ type: "computer", computer: record });
-    } else if (this.selected) {
-      this.emit({ type: "selection", computerId: this.selected });
-    }
+    this.emit({ type: "selection", computerId: this.selected });
     return { success: true, id };
   }
 
@@ -273,12 +324,64 @@ export class Plane implements ControlPlane {
       }
     }
 
+    const tape = TAPE_OPS.has(op.op);
+    const eventId = crypto.randomUUID();
+    const useBrowser = BROWSER_SHOT_OPS.has(op.op);
+    let before = false;
+    let after = false;
+    if (tape) {
+      const buf = await grabShot(machine, useBrowser);
+      if (buf) {
+        putShot(computerId, eventId, "before", buf);
+        before = true;
+      }
+    }
+
     let result: unknown;
     try {
       result = await dispatch(machine, op);
     } catch (err) {
+      if (tape) {
+        const ev = {
+          id: eventId,
+          at: new Date().toISOString(),
+          actor,
+          computerId,
+          op: op.op,
+          detail: mutation(op)?.detail ?? op.op,
+          input: op,
+          error: err instanceof Error ? err.message : "error",
+          before,
+          after: false,
+        };
+        appendEvent(ev);
+        this.emit({ type: "tape", event: ev });
+      }
       if (err instanceof HttpError) throw err;
       throw new HttpError(502, { error: "bridge unreachable" });
+    }
+
+    if (tape) {
+      const buf = await grabShot(machine, useBrowser);
+      if (buf) {
+        putShot(computerId, eventId, "after", buf);
+        after = true;
+      }
+      const mut = mutation(op);
+      const ev = {
+        id: eventId,
+        at: new Date().toISOString(),
+        actor,
+        computerId,
+        op: op.op,
+        detail: mut?.detail ?? op.op,
+        input: op,
+        output: capJson(result),
+        before,
+        after,
+      };
+      appendEvent(ev);
+      this.emit({ type: "tape", event: ev });
     }
 
     const mut = mutation(op);

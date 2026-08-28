@@ -101,13 +101,14 @@ function cdpSend(
   wsUrl: string,
   method: string,
   params: Record<string, unknown> = {},
+  timeoutMs = 8000,
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
     const timer = setTimeout(() => {
       ws.close();
       reject(new HttpError(502, { error: "cdp timed out" }));
-    }, 8000);
+    }, timeoutMs);
     ws.addEventListener("open", () => {
       ws.send(JSON.stringify({ id: 1, method, params }));
     });
@@ -207,6 +208,36 @@ export async function clickSelector(
     throw new HttpError(404, { error: "selector not found" });
   }
   return { ok: true };
+}
+
+export async function capturePage(
+  fullPage = true,
+): Promise<{ mimeType: "image/png"; data: string; path: string }> {
+  const page = await activePage();
+  const ws = page.webSocketDebuggerUrl!;
+  const params: Record<string, unknown> = {
+    format: "png",
+    fromSurface: true,
+    captureBeyondViewport: fullPage,
+  };
+  if (fullPage) {
+    const dim = (await cdpSend(ws, "Runtime.evaluate", {
+      expression:
+        "({w:Math.max(document.documentElement.scrollWidth,document.body&&document.body.scrollWidth||0),h:Math.max(document.documentElement.scrollHeight,document.body&&document.body.scrollHeight||0)})",
+      returnByValue: true,
+    })) as { result?: { value?: { w?: number; h?: number } } };
+    const w = Math.min(16384, Math.max(1, Number(dim.result?.value?.w ?? 1)));
+    const h = Math.min(16384, Math.max(1, Number(dim.result?.value?.h ?? 1)));
+    params.clip = { x: 0, y: 0, width: w, height: h, scale: 1 };
+  }
+  const shot = (await cdpSend(
+    ws,
+    "Page.captureScreenshot",
+    params,
+    20_000,
+  )) as { data?: string };
+  if (!shot.data) throw new HttpError(502, { error: "screenshot failed" });
+  return { mimeType: "image/png", data: shot.data, path: "" };
 }
 
 function pageNavigate(

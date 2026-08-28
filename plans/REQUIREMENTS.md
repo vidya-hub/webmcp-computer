@@ -56,11 +56,11 @@ No default id in env files, compose service names, or `select_computer` enums.
 
 ## 2. How many computers
 
-**Boot: exactly one.** Control plane starts, reconciles labeled containers, and if the count is 0 it spawns **one** with a generated name, then selects it.
+**Boot: zero or more.** Control plane starts, reconciles labeled containers, selects the first if any exist. It does **not** spawn when the list is empty.
 
 **Cap: 4** live computers. A fifth `spawn_computer` returns 409.
 
-**Destroy** is confirmation-gated. After destroy, if zero remain, auto-spawn one generated machine again (the workspace is never an empty canvas with no computer). If that auto-spawn is undesirable later, change it here first, not in code.
+**Destroy** is confirmation-gated. After the last destroy the workspace is empty: centered **New Computer**, no dock. Spawn from empty selects the new machine.
 
 Compose **does not** define named machines. `infra/kasm` builds an image. The API is the only lifecycle (`docker run` / `docker rm -f`).
 
@@ -243,23 +243,20 @@ The website is one screen. Computers are windows on a void canvas.
 - Session memory only (reload retiles from `computers[]`).
 - `select_computer` and in-flight `act` raise that window.
 
-**Axiom chrome**
+**Host chrome (macOS)**
 
-Graphite titlebar, 1px iron, 2px radius, no shadow. Ember **only**:
+The page is a desktop, not a website nav.
 
-1. Approve button fill
-2. 2px left border on the **selected** window
-3. 2px left border on **agent** activity rows, and on a window whose `POST /api/act` is in flight (`actingComputerId`)
+- 28px glass menu bar: app name, **Action TimeLine**, WebMCP extra / `! approval`.
+- Canvas is the desktop (`canvas-bg`). No activity rail.
+- Floating Dock: one tile per computer, `+` spawn (disabled at 4). Minimized dim. Selected = white dot. Acting = pulse. Click restores + selects.
+- Windows: 12px radius, clip VNC, traffic lights left (close / min / max), title centered, glass titlebar, hairline + shadow. Selected = brighter hairline, not an Ember strip. Title when acting: `AGENT  {verb}`.
+- Approval: centered glass sheet. Ember **only** on Approve fill. Esc rejects.
+- Esc: lightbox → Action TimeLine → reject approval. `1–4` still select computers.
 
-No Ember on iframe outlines, text, or status dots. Title when acting: `{id}  AGENT  {verb}`. Status without color pills: `WebMCP  ready`, `● {id}`, `○ {id}`, `! approval`.
+Guest Linux inside the iframe is unchanged.
 
-Activity rail stays. HUMAN iron left border, AGENT Ember left, SYSTEM none.
-
-Approval dialog: graphite, Ember left, nested carbon command, Reject ghost, `Approve →`.
-
-Full-bleed 100vw×100vh. No 1200px marketing column.
-
-Tokens: `plans/DESIGN.md` (colors, type, Ember rules). Layout in DESIGN that still draws two named desktops is stale; this file wins.
+Tokens: `plans/DESIGN.md`. This file wins on layout.
 
 ---
 
@@ -316,9 +313,9 @@ When implementing, remove:
 
 ## 12. Acceptance
 
-- [ ] Page load: one window, generated id, no literal `nova`/`forge` in UI or API list unless a user/agent passed that string.
+- [ ] Page load: computers from Docker only. Empty canvas + New Computer if none. No auto-spawn.
 - [ ] `list_computers` returns that one record.
-- [ ] Agent `select_computer` with the returned id; Ember left border on that window; machine tools mount.
+- [ ] Agent `select_computer` with the returned id; that window raises and is selected; machine tools mount.
 - [ ] Theme, wallpaper, list/read/write files, detach `npm run dev`, `browser_open_url` on the **visible** Chromium.
 - [ ] `spawn_computer({ name: "ci" })` → id `ci`, second window, cap logic holds.
 - [ ] `spawn_computer({})` → generated id, third window.
@@ -329,6 +326,7 @@ When implementing, remove:
 - [ ] Drag/resize works; VNC does not eat the pointer during drag.
 - [ ] Reload: computers from API (reattach Docker); windows retile; names still not hardcoded.
 - [ ] `GET /api/computers` never invents a second machine that Docker did not spawn.
+- [ ] Mutating act writes tape before/after + input/output on the API host; Action TimeLine shows them. Reads do not.
 
 ---
 
@@ -340,4 +338,19 @@ When implementing, remove:
 - API on the host uses `docker` CLI. If the API later runs in Docker, it needs the socket; not now.
 - One host adapter per process. Memory + Docker together will duplicate the list.
 - Kasm VNC is HTTPS + Basic + COEP; proxy must keep stripping those headers.
+
+---
+
+## 14. Act tape
+
+Mutating `POST /api/act` writes a timeline on the **API host**, not the guest jail.
+
+- Dir: `data/tape/` (gitignored). `TapeStore` now; object store later.
+- Cap 100 events. Oldest PNGs deleted.
+- Skip pure reads (`listFiles`, `visibleText`, `screenshot`, …).
+- Desktop mutations: `scrot` before/after.
+- Browser mutations (`openUrl`, tabs, `clickSelector`, …): CDP full-page (`captureBeyondViewport` / clip), cap 16384px.
+- Event stores `input` (the op), `output` or `error`, plus before/after PNG flags.
+- `GET /api/tape` lists events (newest first). `GET /api/tape/:id/before|after` serves PNG.
+- Menu **Action TimeLine**: DevTools split (event list + inspector), computer filter, click shot → lightbox. No new keyboard product.
 - `main.bundle.js` / `lastActiveAt` errors from ChatGPT or extensions are not this app. Vite does not emit `main.bundle.js`.

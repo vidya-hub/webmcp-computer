@@ -6,21 +6,19 @@ export function ApprovalDialog() {
   const opts = pendingApproval.options ?? [];
   return (
     <div className="overlay">
-      <div className="approval">
-        <div className="mark">! approval</div>
-        <div className="mb-4 text-[12px] text-fog">{pendingApproval.computerId}</div>
+      <div className="sheet">
+        <div className="sheet-mark">Permission</div>
+        <div className="sheet-host">{pendingApproval.computerId}</div>
         <h2>{pendingApproval.title || "Agent requests permission"}</h2>
         {pendingApproval.body ? (
-          <p className="mb-4 text-[14px] leading-relaxed text-chalk">
-            {pendingApproval.body}
-          </p>
+          <p className="sheet-body">{pendingApproval.body}</p>
         ) : null}
         {opts.length === 0 ? (
-          <div className="cmd">
+          <div className="sheet-cmd">
             {pendingApproval.command ?? pendingApproval.summary}
           </div>
         ) : (
-          <div className="mb-6 flex flex-col gap-2">
+          <div className="sheet-opts">
             {opts.map((o) => (
               <button
                 key={o}
@@ -28,12 +26,12 @@ export function ApprovalDialog() {
                 className="btn-ghost w-full text-left"
                 onClick={() => void resolveChoice(pendingApproval.id, o)}
               >
-                {o} →
+                {o}
               </button>
             ))}
           </div>
         )}
-        <div className="actions">
+        <div className="sheet-actions">
           <button
             type="button"
             className="btn-ghost"
@@ -47,7 +45,7 @@ export function ApprovalDialog() {
               className="btn-approve"
               onClick={() => void resolveApproval(pendingApproval.id, "approved")}
             >
-              Approve →
+              Approve
             </button>
           ) : null}
         </div>

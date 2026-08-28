@@ -24,6 +24,7 @@ export function Canvas() {
     actingComputerId,
     actingVerb,
     selectComputer,
+    spawnComputer,
     destroyComputer,
     minimized,
     minimizeComputer,
@@ -79,14 +80,14 @@ export function Canvas() {
       if (!b) return prev;
       let x = next.x ?? b.x;
       let y = next.y ?? b.y;
-      let w = even(next.w ?? b.w);
-      let h = even(next.h ?? b.h);
-      w = Math.min(Math.max(320, w), even(cw));
-      h = Math.min(Math.max(240, h), even(ch));
+      let w = next.w ?? b.w;
+      let h = next.h ?? b.h;
+      w = Math.min(Math.max(320, w), cw);
+      h = Math.min(Math.max(240, h), ch);
       x = Math.min(Math.max(0, x), Math.max(0, cw - 40));
       y = Math.min(Math.max(0, y), Math.max(0, ch - 32));
-      if (x + w > cw) w = even(Math.max(320, cw - x));
-      if (y + h > ch) h = even(Math.max(240, ch - y));
+      if (x + w > cw) w = Math.max(320, cw - x);
+      if (y + h > ch) h = Math.max(240, ch - y);
       return { ...prev, [id]: { ...b, ...next, x, y, w, h } };
     });
   }
@@ -110,7 +111,7 @@ export function Canvas() {
           x: 8,
           y: 8,
           w: even(Math.max(320, cw - 16)),
-          h: even(Math.max(240, ch - 16)),
+          h: even(Math.max(240, ch - 88)),
           z: zTop.current,
         },
       }));
@@ -127,6 +128,14 @@ export function Canvas() {
   return (
     <div className="wm-stage">
       <div className="wm-canvas" ref={ref}>
+        {computers.length === 0 ? (
+          <div className="desk-blank">
+            <p>No computers</p>
+            <button type="button" className="desk-new" onClick={() => void spawnComputer()}>
+              New Computer
+            </button>
+          </div>
+        ) : null}
         {computers.map((c: Computer) => {
           const b = bounds[c.id];
           if (!b || minimized.includes(c.id)) return null;
@@ -145,7 +154,19 @@ export function Canvas() {
                 if (c.id !== selectedComputer) void selectComputer(c.id as ComputerId);
               }}
               onBounds={(n) => patch(c.id, n)}
-              onDrag={(v) => setDraggingId(v ? c.id : null)}
+              onDrag={(v) => {
+                if (!v) {
+                  setBounds((prev) => {
+                    const b = prev[c.id];
+                    if (!b) return prev;
+                    return {
+                      ...prev,
+                      [c.id]: { ...b, w: even(b.w), h: even(b.h) },
+                    };
+                  });
+                }
+                setDraggingId(v ? c.id : null);
+              }}
               onMinimize={() => minimize(c.id)}
               onMaximize={() => maximize(c.id)}
               onClose={() => void destroyComputer(c.id as ComputerId)}

@@ -11,6 +11,7 @@ import type { Duplex } from "node:stream";
 import { promisify } from "node:util";
 import { WebSocketServer, type WebSocket } from "ws";
 import { DockerHost } from "./docker-host.ts";
+import { getShot, listTape } from "./tape-store.ts";
 import { HttpError } from "./http-error.ts";
 import type { ComputerHost } from "./host.ts";
 import { MemoryHost } from "./memory-host.ts";
@@ -57,6 +58,22 @@ app.use(
 
 app.get("/health", (c) => c.json({ ok: true }));
 app.get("/api/health", (c) => c.json({ ok: true }));
+
+app.get("/api/tape", (c) => {
+  return c.json({ events: listTape() });
+});
+
+app.get("/api/tape/:id/:side", (c) => {
+  const side = c.req.param("side");
+  if (side !== "before" && side !== "after") {
+    return c.json({ error: "before or after" }, 400);
+  }
+  const buf = getShot(c.req.param("id"), side);
+  if (!buf) return c.body(null, 404);
+  return new Response(buf, {
+    headers: { "content-type": "image/png", "cache-control": "private, max-age=3600" },
+  });
+});
 
 app.get("/api/computers", async (c) => {
   return c.json({ computers: await plane.listComputers() });

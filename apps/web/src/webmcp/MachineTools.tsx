@@ -511,6 +511,23 @@ export function MachineTools() {
   });
 
   useWebMCP({
+    name: "browser_screenshot",
+    description:
+      "PNG of the active Chromium tab. Full page by default, capped at 16384px.",
+    inputSchema: {
+      type: "object",
+      properties: { fullPage: { type: "boolean" } },
+      additionalProperties: false,
+    } as const,
+    annotations: { readOnlyHint: true },
+    execute: async (input) =>
+      act({
+        op: "browserScreenshot",
+        fullPage: input.fullPage !== false,
+      }),
+  });
+
+  useWebMCP({
     name: "computer_get_processes",
     description: "Running processes on the selected computer.",
     inputSchema: EMPTY,

@@ -89,22 +89,22 @@ Axiom bans green/red pills.
 
 ## Layout
 
-Full-bleed void. The shell is 100vw × 100vh. Do not wrap the desktops in a 1200px marketing column. Sidebars are 240px / 280px. The rest is the two iframes, split 1fr 1fr, min-height 0 so they actually fill.
+The host page is a macOS desktop. 100vw × 100vh. No marketing column. No activity rail.
 
 ```
-nav 56px:  ~/ webmcp-computer     nova  forge     WebMCP  ready
-----------------------------------------------------------------
-left 240px          center                    right 280px
-machine list        nova iframe | forge iframe activity
-                    selected card: Ember      HUMAN / AGENT / SYSTEM
-                    2px left border           last 40 events
-----------------------------------------------------------------
-status: selected=nova  running=2  pending=0
+menu 28px:  webmcp-computer    Action TimeLine              WebMCP  ready
+---------------------------------------------------------------------------
+desktop (canvas-bg)
+  windows: 12px radius, traffic lights left, glass titlebar, VNC body
+---------------------------------------------------------------------------
+dock (floating):  [desk-a] [ci] [+]
 ```
 
-Both desktops stay visible. Select changes the card border, the status line, and which machine tools are mounted.
+Chrome type: system UI (`-apple-system`). Timeline Input/Output: JetBrains Mono.
 
-Iframe src: `/desktops/nova/` and `/desktops/forge/`. Visual only. No `allow="tools"`. Hairline iron around the frame. 2px radius.
+Ember **only** on Approve. Selected window is a brighter hairline, not an Ember strip.
+
+Iframe src: `/desktops/:id/?v=rfb`. Visual only. No `allow="tools"`.
 
 ## Buttons
 
@@ -134,7 +134,7 @@ Monospace 14px. Timestamp fog. Actor uppercase steel. Agent rows get the Ember l
 
 ## Approval dialog
 
-Graphite card, 32px padding, 2px Ember left border, 2px radius. Nested carbon block shows the command. Reject ghost left, Approve → right.
+Centered glass sheet, 16px radius. Nested carbon command. Reject ghost left, Approve right (Ember fill).
 
 ## Linux wallpapers (phase 05)
 

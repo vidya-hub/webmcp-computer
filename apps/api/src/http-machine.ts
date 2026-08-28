@@ -207,6 +207,10 @@ export class HttpMachine implements Machine {
     return this.call({ op: "notify", title, body }) as Promise<void>;
   }
 
+  browserScreenshot(fullPage?: boolean): Promise<Shot> {
+    return this.call({ op: "browserScreenshot", fullPage }) as Promise<Shot>;
+  }
+
   private async call(op: MachineOp): Promise<unknown> {
     let res: Response;
     try {

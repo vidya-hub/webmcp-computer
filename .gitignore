@@ -5,3 +5,5 @@ dist
 tmp-jail
 .env
 .env.local
+data/tape
+**/data/tape

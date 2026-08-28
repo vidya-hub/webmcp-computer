@@ -340,6 +340,10 @@ export class MemoryMachine implements Machine {
 
   async notify(_title: string, _body: string): Promise<void> {}
 
+  async browserScreenshot(_fullPage?: boolean): Promise<Shot> {
+    throw new HttpError(502, { error: "no display" });
+  }
+
   private resolve(path: string): string {
     return this.resolveFrom(HOME_JAIL_DEFAULT, path);
   }

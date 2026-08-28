@@ -76,6 +76,21 @@ export interface ActivityEvent {
   detail: string;
 }
 
+export interface TapeEvent {
+  id: string;
+  at: string;
+  actor: Actor;
+  computerId: ComputerId;
+  op: string;
+  detail: string;
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+  log?: string;
+  before: boolean;
+  after: boolean;
+}
+
 export interface Approval {
   id: string;
   computerId: ComputerId;
@@ -171,7 +186,8 @@ export type MachineOp =
   | { op: "listPorts" }
   | { op: "devServers" }
   | { op: "installPackage"; name: string }
-  | { op: "notify"; title: string; body: string };
+  | { op: "notify"; title: string; body: string }
+  | { op: "browserScreenshot"; fullPage?: boolean };
 
 export interface Machine {
   snapshot(): Promise<ComputerState>;
@@ -240,6 +256,7 @@ export interface Machine {
   devServers(): Promise<{ servers: { url: string; port: number }[] }>;
   installPackage(name: string): Promise<{ name: string; stdout: string }>;
   notify(title: string, body: string): Promise<void>;
+  browserScreenshot(fullPage?: boolean): Promise<Shot>;
 }
 
 export interface SpawnSpec {
@@ -271,7 +288,8 @@ export type WsEvent =
   | { type: "activity"; event: ActivityEvent }
   | { type: "approval"; approval: Approval }
   | { type: "selection"; computerId: ComputerId | null }
-  | { type: "computer"; computer: Computer };
+  | { type: "computer"; computer: Computer }
+  | { type: "tape"; event: TapeEvent };
 
 export const HOME_JAIL_DEFAULT = "/home/kasm-user";
 
@@ -375,6 +393,8 @@ export async function dispatch(
       return machine.installPackage(op.name);
     case "notify":
       return machine.notify(op.title, op.body);
+    case "browserScreenshot":
+      return machine.browserScreenshot(op.fullPage);
   }
 }
 
@@ -422,6 +442,7 @@ export const WEBMCP_TOOLS = [
   "computer_install_package",
   "computer_set_name",
   "request_human_choice",
+  "browser_screenshot",
 ] as const;
 
 export type WebMcpToolName = (typeof WEBMCP_TOOLS)[number];

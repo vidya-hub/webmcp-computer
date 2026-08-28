@@ -28,6 +28,7 @@ import {
 import {
   browserState,
   cdpAlive,
+  capturePage,
   clickSelector,
   closeTab,
   createTab,
@@ -356,6 +357,10 @@ export class LinuxMachine implements Machine {
 
   async notify(title: string, body: string): Promise<void> {
     return sys.notify(title, body);
+  }
+
+  async browserScreenshot(fullPage?: boolean): Promise<Shot> {
+    return capturePage(fullPage !== false);
   }
 
   private wait(command: string, cwd: string): Promise<CommandResult> {
