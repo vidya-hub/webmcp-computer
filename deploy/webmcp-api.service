@@ -15,6 +15,7 @@ WorkingDirectory=/home/ubuntu/homelab/webmcp-computer
 EnvironmentFile=/home/ubuntu/homelab/webmcp-computer/deploy/.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=HOST_BACKEND=docker
+Environment=AUTH_REQUIRED=true
 ExecStart=/home/ubuntu/homelab/webmcp-computer/apps/api/node_modules/.bin/tsx apps/api/src/index.ts
 Restart=always
 RestartSec=3

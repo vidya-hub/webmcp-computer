@@ -1,0 +1,25 @@
+[Unit]
+Description=webmcp-computer auth service
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+# Postgres + Redis run as a docker compose stack (deploy/compose.postgres.yml),
+# ordered after docker.service. The service itself waits for the schema to reach
+# migration >= 3 (the API's migration runner owns the schema) before serving.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/homelab/webmcp-computer
+EnvironmentFile=/home/ubuntu/homelab/webmcp-computer/deploy/.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/ubuntu/homelab/webmcp-computer/apps/auth/node_modules/.bin/tsx apps/auth/src/index.ts
+Restart=always
+RestartSec=3
+TimeoutStopSec=10
+NoNewPrivileges=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
