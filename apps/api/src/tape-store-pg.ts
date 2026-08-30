@@ -1,26 +1,13 @@
-import { Pool } from "pg";
 import {
-  S3Client,
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import type { TapeEvent } from "@webmcp-computer/contract";
+import { pool } from "./pg.ts";
+import { s3, BUCKET } from "./s3.ts";
 
 const CAP = Number(process.env.TAPE_CAP ?? 100);
-const BUCKET = process.env.S3_BUCKET ?? "webmcp-computer";
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-
-const s3 = new S3Client({
-  endpoint: process.env.S3_ENDPOINT,
-  region: process.env.S3_REGION ?? "us-east-1",
-  forcePathStyle: (process.env.S3_FORCE_PATH_STYLE ?? "true") !== "false",
-  credentials: {
-    accessKeyId: process.env.S3_ACCESS_KEY ?? "",
-    secretAccessKey: process.env.S3_SECRET_KEY ?? "",
-  },
-});
 
 type Row = {
   id: string;
@@ -107,6 +94,8 @@ export async function putShot(
 }
 
 export async function appendEvent(ev: TapeEvent): Promise<void> {
+  // Insert only — retention runs on a background interval (startRetention), not
+  // on this hot path, so a slow MinIO can't back up the tape write queue.
   await pool.query(
     `insert into tape_events
        (id, at, actor, computer_id, op, detail, input, output, error, log, has_before, has_after)
@@ -127,9 +116,15 @@ export async function appendEvent(ev: TapeEvent): Promise<void> {
       ev.after,
     ],
   );
+}
 
+// Delete events past the cap and their screenshots in one pass. Safe to call on
+// an interval; a single statement returns the keys to purge from object storage.
+export async function pruneTape(): Promise<void> {
   const { rows: stale } = await pool.query<{ id: string; computer_id: string }>(
-    "select id, computer_id from tape_events order by at desc offset $1",
+    `delete from tape_events
+      where id in (select id from tape_events order by at desc offset $1)
+      returning id, computer_id`,
     [CAP],
   );
   if (stale.length === 0) return;
@@ -147,7 +142,4 @@ export async function appendEvent(ev: TapeEvent): Promise<void> {
       ),
     ),
   );
-  await pool.query("delete from tape_events where id = any($1)", [
-    stale.map((s) => s.id),
-  ]);
 }

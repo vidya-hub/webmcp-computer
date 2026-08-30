@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { WEBMCP_TOOLS, type HomeArchive } from "@webmcp-computer/contract";
+import { api } from "../../api/client.ts";
 import { store, useStore } from "../../store/index.ts";
 import { snapRect } from "../../store/slices/wm.ts";
 import { WindowFrame } from "./Window.tsx";
@@ -13,6 +15,12 @@ export function Canvas() {
   const actingComputerId = useStore((s) => s.actingComputerId);
   const spawnComputer = useStore((s) => s.spawnComputer);
   const ref = useRef<HTMLDivElement>(null);
+  const [archives, setArchives] = useState<HomeArchive[]>([]);
+  useEffect(() => {
+    void api<{ archives: HomeArchive[] }>("/api/archives")
+      .then((d) => setArchives(d.archives ?? []))
+      .catch(() => setArchives([]));
+  }, []);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -73,10 +81,35 @@ export function Canvas() {
         <div className="wm-wallpaper" aria-hidden />
         {computers.length === 0 ? (
           <div className="desk-blank">
-            <p>No computers</p>
-            <button type="button" className="desk-new" onClick={() => void spawnComputer()}>
-              New Computer
-            </button>
+            <div className="desk-onboard">
+              <div className="desk-onboard-mark" />
+              <h1>WebMCP Computer</h1>
+              <p>
+                Tools are already registered. Spawn a computer to drive one.
+              </p>
+              <button
+                type="button"
+                className="desk-new"
+                onClick={() => void spawnComputer()}
+              >
+                New Computer
+              </button>
+              {archives.length > 0 ? (
+                <button
+                  type="button"
+                  className="desk-new ghost"
+                  onClick={() => {
+                    const first = archives[0];
+                    if (first) void spawnComputer(first.id);
+                  }}
+                >
+                  Restore files…
+                </button>
+              ) : null}
+              <span className="desk-onboard-hint">
+                Dock = fleet · Timeline = tape · Recipes = teach. {WEBMCP_TOOLS.length} tools are live.
+              </span>
+            </div>
           </div>
         ) : null}
         {snap && draggingId ? (

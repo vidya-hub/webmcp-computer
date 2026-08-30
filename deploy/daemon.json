@@ -1,0 +1,8 @@
+{
+  "//": "Reference snippet for /etc/docker/daemon.json to bound container log growth. This host shares Docker with other services — MERGE these keys into the existing file (if any) and `sudo systemctl reload docker`; do NOT blindly overwrite it.",
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}

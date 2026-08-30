@@ -1,11 +1,26 @@
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      "content-type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
+export async function api<T>(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = 30_000,
+): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      ...init,
+      headers: {
+        "content-type": "application/json",
+        ...(init?.headers ?? {}),
+      },
+      signal: init?.signal ?? AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw new Error(
+        "request timed out — the workspace may be busy or offline",
+      );
+    }
+    throw err;
+  }
   const text = await res.text();
   let body: unknown = text;
   try {

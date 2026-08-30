@@ -12,11 +12,11 @@ export const useStore = create<AppStore>()(
     (set, get) => ({
       ...createServerSlice(set, get),
       ...createWmSlice(set, get),
-      ...createUiSlice(set),
+      ...createUiSlice(set, get),
     }),
     {
       name: "webmcp-ui",
-      partialize: (s) => ({ sound: s.sound, booted: s.booted }),
+      partialize: (s) => ({ sound: s.sound }),
       onRehydrateStorage: () => (state) => {
         if (state) syncSoundFromPersist(state.sound);
       },

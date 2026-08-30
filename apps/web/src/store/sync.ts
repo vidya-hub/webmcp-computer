@@ -25,6 +25,10 @@ export function applyWsEvent(event: WsEvent): void {
       s.upsertComputer(event.computer as Computer);
       return;
     case "tape":
+      s.prependTape(event.event);
+      return;
+    case "recording":
+      s.setRecordingComputerId(event.computerId);
       return;
   }
 }
@@ -32,8 +36,17 @@ export function applyWsEvent(event: WsEvent): void {
 export function startSync(): void {
   void refresh();
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  window.setTimeout(() => {
+
+  // Self-rescheduling connect: a dropped socket must not leave the UI stuck on
+  // 30s polling forever. Reconnect with capped exponential backoff + jitter.
+  function connect(attempt = 0): void {
+    let live = attempt;
     const ws = new WebSocket(`${proto}://${location.host}/api/ws`);
+    ws.onopen = () => {
+      live = 0;
+      // Resync anything missed while the socket was down.
+      void refresh();
+    };
     ws.onmessage = (msg) => {
       try {
         applyWsEvent(JSON.parse(String(msg.data)) as WsEvent);
@@ -41,7 +54,15 @@ export function startSync(): void {
         void refresh();
       }
     };
-  }, 100);
+    ws.onerror = () => ws.close();
+    ws.onclose = () => {
+      const delay = Math.min(30_000, 1000 * 2 ** live) + Math.random() * 500;
+      window.setTimeout(() => connect(live + 1), delay);
+    };
+  }
+  window.setTimeout(() => connect(0), 100);
+
+  // Belt-and-braces poll in case the socket is silently half-open.
   window.setInterval(() => void refresh(), 30_000);
 }
 

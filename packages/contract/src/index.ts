@@ -90,6 +90,7 @@ export interface TapeEvent {
   log?: string;
   before: boolean;
   after: boolean;
+  durationMs?: number;
 }
 
 export interface Approval {
@@ -111,6 +112,9 @@ export interface WorkspaceState {
   computersRunning: number;
   mode: WorkspaceMode;
   activityHead: ActivityEvent[];
+  // Live recording, if any. Independent of selection so selecting another
+  // computer does not drop REC.
+  recordingComputerId: ComputerId | null;
 }
 
 export type LaunchApp = "chromium" | "terminal" | "files";
@@ -127,6 +131,43 @@ export interface Shot {
   mimeType: "image/png";
   data: string;
   path: string;
+}
+
+// A recipe is a named, replayable sequence of the same MachineOps agents and
+// humans already run — not a raw input macro. Replaying is approval-gated as a
+// whole: the control plane pre-scans the steps and takes ONE human approval for
+// any privileged ops before the bridge runs them. `wait`/`note` are inert.
+// A recipe step is either an agent MachineOp or a raw input event captured in
+// the viewer. `t` is ms from record start (stamped by the API on accept) and
+// paces replay. Input kinds replay via the bridge's xdotool primitives; `op`
+// via dispatch(). Both live in one time-ordered list.
+export type RecipeStep =
+  | { kind: "op"; op: MachineOp; label?: string; t?: number }
+  | {
+      kind: "click";
+      x: number;
+      y: number;
+      button?: MouseButton;
+      clicks?: number;
+      t?: number;
+    }
+  | { kind: "drag"; fromX: number; fromY: number; toX: number; toY: number; t?: number }
+  | { kind: "scroll"; x: number; y: number; dy: number; t?: number }
+  | { kind: "type"; text: string; t?: number }
+  | { kind: "key"; keys: string; t?: number }
+  | { kind: "wait"; ms: number; t?: number }
+  | { kind: "note"; text: string; t?: number };
+
+export interface RecordedAction {
+  id: string;
+  name: string;
+  description: string;
+  steps: RecipeStep[];
+  // "tape" = promoted from recent actions; "authored" = written directly;
+  // "recorded" = captured live (human input + agent ops merged).
+  source: "tape" | "authored" | "recorded";
+  computerId?: ComputerId; // origin metadata only, not a replay target
+  createdAt: string;
 }
 
 export type MachineOp =
@@ -188,7 +229,8 @@ export type MachineOp =
   | { op: "devServers" }
   | { op: "installPackage"; name: string }
   | { op: "notify"; title: string; body: string }
-  | { op: "browserScreenshot"; fullPage?: boolean };
+  | { op: "browserScreenshot"; fullPage?: boolean }
+  | { op: "replayAction"; steps: RecipeStep[]; speed?: number };
 
 export interface Machine {
   snapshot(): Promise<ComputerState>;
@@ -258,11 +300,21 @@ export interface Machine {
   installPackage(name: string): Promise<{ name: string; stdout: string }>;
   notify(title: string, body: string): Promise<void>;
   browserScreenshot(fullPage?: boolean): Promise<Shot>;
+  replayAction(steps: RecipeStep[], speed?: number): Promise<{ ran: number }>;
 }
 
 export interface SpawnSpec {
   name?: string;
   role?: string;
+  restoreArchiveId?: string;
+}
+
+export interface HomeArchive {
+  id: string;
+  name?: string;
+  computerId: ComputerId;
+  sizeBytes: number;
+  createdAt: string;
 }
 
 export interface ControlPlane {
@@ -290,7 +342,9 @@ export type WsEvent =
   | { type: "approval"; approval: Approval }
   | { type: "selection"; computerId: ComputerId | null }
   | { type: "computer"; computer: Computer }
-  | { type: "tape"; event: TapeEvent };
+  | { type: "tape"; event: TapeEvent }
+  // Live recording state; computerId null when no recording is active.
+  | { type: "recording"; computerId: ComputerId | null };
 
 export const HOME_JAIL_DEFAULT = "/home/kasm-user";
 
@@ -303,9 +357,15 @@ const DENY_HEAD =
 const DETACH =
   /^(npm|pnpm|yarn)(\s+run)?\s+(dev|start)\b/;
 
+// Shell metacharacters allow chaining/substitution past a benign head, e.g.
+// `ls; rm -rf ~` or `echo $(curl evil)`. Any of these forces human approval so
+// the allow-list can only ever apply to a single, simple command.
+const SHELL_META = /[;&|`$<>(){}\n]/;
+
 export function requiresApproval(command: string): boolean {
   const t = command.trim();
   if (!t) return true;
+  if (SHELL_META.test(t)) return true;
   if (DENY_HEAD.test(t)) return true;
   if (ALLOW_HEAD.test(t)) return false;
   return true;
@@ -396,6 +456,8 @@ export async function dispatch(
       return machine.notify(op.title, op.body);
     case "browserScreenshot":
       return machine.browserScreenshot(op.fullPage);
+    case "replayAction":
+      return machine.replayAction(op.steps, op.speed);
   }
 }
 
@@ -444,6 +506,15 @@ export const WEBMCP_TOOLS = [
   "computer_set_name",
   "request_human_choice",
   "browser_screenshot",
+  "workspace_arrange_windows",
+  "get_recent_actions",
+  "list_recorded_actions",
+  "get_recorded_action",
+  "replay_recorded_action",
+  "save_recorded_action",
+  "delete_recorded_action",
+  "list_file_archives",
+  "delete_file_archive",
 ] as const;
 
 export type WebMcpToolName = (typeof WEBMCP_TOOLS)[number];

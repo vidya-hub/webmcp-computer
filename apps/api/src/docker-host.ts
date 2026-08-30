@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import {
   COMPUTER_CPUS,
@@ -27,6 +27,22 @@ function vncUrlFor(port: string, imageName = IMAGE): string {
   return `${scheme}://127.0.0.1:${port}`;
 }
 
+function streamUrlFor(port: string): string {
+  return `http://127.0.0.1:${port}`;
+}
+
+function streamAuthFor(token: string): string {
+  return `Basic ${Buffer.from(`selkies:${token}`).toString("base64")}`;
+}
+
+async function optionalPort(cname: string, spec: string): Promise<string | undefined> {
+  try {
+    return parsePort((await dk(["port", cname, spec])).stdout);
+  } catch {
+    return undefined;
+  }
+}
+
 function dk(args: string[], timeout = 20_000) {
   return execFileAsync("docker", args, { timeout });
 }
@@ -43,7 +59,10 @@ async function waitHealthy(bridgePort: string, ms: number): Promise<void> {
   let last = "";
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`http://127.0.0.1:${bridgePort}/health`);
+      const res = await fetch(`http://127.0.0.1:${bridgePort}/health`, {
+        // A hung TCP read (e.g. docker pause) must not block the deadline loop.
+        signal: AbortSignal.timeout(2_000),
+      });
       if (res.ok) return;
       last = String(res.status);
     } catch (err) {
@@ -52,6 +71,30 @@ async function waitHealthy(bridgePort: string, ms: number): Promise<void> {
     await new Promise((r) => setTimeout(r, 500));
   }
   throw new HttpError(502, { error: `bridge not healthy: ${last}` });
+}
+
+async function waitSelkies(
+  port: string,
+  token: string,
+  ms: number,
+): Promise<void> {
+  const deadline = Date.now() + ms;
+  const auth = streamAuthFor(token);
+  let last = "";
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/health`, {
+        headers: { authorization: auth },
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (res.ok) return;
+      last = String(res.status);
+    } catch (err) {
+      last = err instanceof Error ? err.message : "fetch failed";
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new HttpError(502, { error: `selkies not healthy: ${last}` });
 }
 
 function envMap(lines: string[]): Record<string, string> {
@@ -63,28 +106,55 @@ function envMap(lines: string[]): Record<string, string> {
   return out;
 }
 
+function maxComputers(): number {
+  const v = Number(process.env.MAX_COMPUTERS);
+  return Number.isFinite(v) && v > 0 ? v : MAX_COMPUTERS;
+}
+
 export class DockerHost implements ComputerHost {
   private readonly records = new Map<string, ComputerRecord>();
   private readonly machines = new Map<string, Machine>();
   private wallpaperAt = 0;
+  // In-flight spawn reservations (Node is single-threaded, so a counter + set
+  // guarded synchronously before the first await is a sufficient mutex).
+  private pending = 0;
+  private readonly pendingIds = new Set<string>();
+  private readonly recordListeners = new Set<(r: ComputerRecord) => void>();
+
+  subscribeRecords(listener: (record: ComputerRecord) => void): () => void {
+    this.recordListeners.add(listener);
+    return () => this.recordListeners.delete(listener);
+  }
+
+  private publishRecord(record: ComputerRecord): void {
+    for (const listener of this.recordListeners) listener(record);
+  }
 
   async reconcile(): Promise<void> {
-    let names = "";
+    let rows = "";
     try {
       const { stdout } = await dk([
         "ps",
-        "-q",
+        "-a",
         "--filter",
         "label=webmcp.computer=1",
         "--format",
-        "{{.Names}}",
+        "{{.Names}}\t{{.State}}",
       ]);
-      names = stdout;
+      rows = stdout;
     } catch {
       return;
     }
-    for (const cname of names.trim().split("\n").filter(Boolean)) {
+    for (const row of rows.trim().split("\n").filter(Boolean)) {
+      const [cname, state] = row.split("\t");
+      if (!cname) continue;
       const id = cname.replace(/^webmcp-/, "");
+      // Desktops are ephemeral (spec §13). A stopped/created corpse is invisible
+      // to the API and its name blocks re-use — remove it instead of adopting.
+      if (state !== "running") {
+        await dk(["rm", "-f", cname]).catch(() => undefined);
+        continue;
+      }
       try {
         const { stdout: envOut } = await dk([
           "inspect",
@@ -101,6 +171,7 @@ export class DockerHost implements ComputerHost {
         ]);
         const vnc = parsePort((await dk(["port", cname, "6901/tcp"])).stdout);
         const bridge = parsePort((await dk(["port", cname, "8080/tcp"])).stdout);
+        const streamPort = await optionalPort(cname, "6902/tcp");
         const wallpaper = (
           WALLPAPER_CYCLE.includes(env.WALLPAPER as (typeof WALLPAPER_CYCLE)[number])
             ? env.WALLPAPER
@@ -114,9 +185,17 @@ export class DockerHost implements ComputerHost {
           role: "computer",
           wallpaper,
           vncUrl: vncUrlFor(vnc, imageOut.trim()),
+          streamUrl: streamPort ? streamUrlFor(streamPort) : undefined,
+          streamAuth:
+            streamPort && env.MACHINE_TOKEN
+              ? streamAuthFor(env.MACHINE_TOKEN)
+              : undefined,
         };
         this.records.set(record.id, record);
-        this.machines.set(record.id, new HttpMachine(`http://127.0.0.1:${bridge}`));
+        this.machines.set(
+          record.id,
+          new HttpMachine(`http://127.0.0.1:${bridge}`, env.MACHINE_TOKEN),
+        );
         this.wallpaperAt += 1;
       } catch {
         /* skip unreadable container */
@@ -127,20 +206,44 @@ export class DockerHost implements ComputerHost {
   async spawn(
     spec: SpawnSpec,
   ): Promise<{ record: ComputerRecord; machine: Machine }> {
-    if (this.records.size >= MAX_COMPUTERS) {
+    // Reserve a slot synchronously (before any await) so N concurrent spawns
+    // can't all pass the cap check and overshoot MAX_COMPUTERS, and can't
+    // collide on the same generated name.
+    if (this.records.size + this.pending >= maxComputers()) {
       throw new HttpError(409, { error: "computer cap reached" });
     }
     let allocated: { id: string; name: string };
     try {
-      allocated = allocateName(spec.name, this.records.keys());
+      allocated = allocateName(
+        spec.name,
+        new Set([...this.records.keys(), ...this.pendingIds]).values(),
+      );
     } catch {
       throw new HttpError(400, { error: "invalid name" });
     }
+    this.pending += 1;
+    this.pendingIds.add(allocated.id);
+    try {
+      return await this.spawnReserved(spec, allocated);
+    } finally {
+      this.pending -= 1;
+      this.pendingIds.delete(allocated.id);
+    }
+  }
+
+  private async spawnReserved(
+    spec: SpawnSpec,
+    allocated: { id: string; name: string },
+  ): Promise<{ record: ComputerRecord; machine: Machine }> {
     const wallpaper = WALLPAPER_CYCLE[
       this.wallpaperAt % WALLPAPER_CYCLE.length
     ] as WallpaperId;
     this.wallpaperAt += 1;
     const cname = `webmcp-${allocated.id}`;
+    // Per-container secret: the bridge (and VNC path) sit on the shared docker
+    // bridge network reachable by sibling containers. HttpMachine sends this as
+    // a bearer token so only the control plane can drive a guest.
+    const token = crypto.randomUUID();
     try {
       await dk(
         [
@@ -160,20 +263,22 @@ export class DockerHost implements ComputerHost {
           COMPUTER_CPUS,
           "--pids-limit",
           "512",
-          "--device",
-          "/dev/fuse",
-          "--cap-add",
-          "SYS_ADMIN",
+          // No SYS_ADMIN / apparmor=unconfined / /dev/fuse: those existed only
+          // for a cosmetic in-guest `df` and were near container-escape risk.
           "--security-opt",
-          "apparmor=unconfined",
+          "no-new-privileges",
           "-p",
           "127.0.0.1:0:6901",
+          "-p",
+          "127.0.0.1:0:6902",
           "-p",
           "127.0.0.1:0:8080",
           "-e",
           `MACHINE_ID=${allocated.id}`,
           "-e",
           `MACHINE_NAME=${allocated.name}`,
+          "-e",
+          `MACHINE_TOKEN=${token}`,
           "-e",
           `WALLPAPER=${wallpaper}`,
           "-e",
@@ -193,9 +298,11 @@ export class DockerHost implements ComputerHost {
     }
     let vnc: string;
     let bridge: string;
+    let stream: string;
     try {
       vnc = parsePort((await dk(["port", cname, "6901/tcp"])).stdout);
       bridge = parsePort((await dk(["port", cname, "8080/tcp"])).stdout);
+      stream = parsePort((await dk(["port", cname, "6902/tcp"])).stdout);
     } catch (err) {
       await dk(["rm", "-f", cname]).catch(() => undefined);
       throw new HttpError(502, {
@@ -210,15 +317,30 @@ export class DockerHost implements ComputerHost {
       role: spec.role?.trim() || "computer",
       wallpaper,
       vncUrl: vncUrlFor(vnc, IMAGE),
+      streamUrl: streamUrlFor(stream),
+      streamAuth: streamAuthFor(token),
     };
-    const machine = new HttpMachine(`http://127.0.0.1:${bridge}`);
+    const machine = new HttpMachine(`http://127.0.0.1:${bridge}`, token);
     this.records.set(record.id, record);
     this.machines.set(record.id, machine);
+    this.publishRecord(record);
     try {
       await waitHealthy(bridge, 60_000);
+      await waitSelkies(stream, token, 20_000);
       record.status = "running";
+      this.publishRecord(record);
     } catch (err) {
-      record.status = "error";
+      // A failed health check must not leave a running container that burns a
+      // MAX_COMPUTERS slot forever. Capture logs for diagnosis, then remove it.
+      const logs = await dk(["logs", "--tail", "50", cname]).catch(
+        () => undefined,
+      );
+      if (logs) {
+        console.error(`spawn ${cname} unhealthy; last logs:\n${logs.stdout}${logs.stderr}`);
+      }
+      await dk(["rm", "-f", cname]).catch(() => undefined);
+      this.records.delete(record.id);
+      this.machines.delete(record.id);
       throw err;
     }
     return { record, machine };
@@ -228,9 +350,104 @@ export class DockerHost implements ComputerHost {
     if (!this.records.has(id)) {
       throw new HttpError(404, { error: "unknown computer" });
     }
-    await dk(["rm", "-f", `webmcp-${id}`]).catch(() => undefined);
+    const cname = `webmcp-${id}`;
+    try {
+      await dk(["rm", "-f", cname]);
+    } catch (err) {
+      // Don't drop the record if the container might still exist — that would
+      // orphan it (invisible to the API, name/ports held forever).
+      const still = await dk(["inspect", cname]).then(
+        () => true,
+        () => false,
+      );
+      if (still) {
+        const rec = this.records.get(id);
+        if (rec) rec.status = "error";
+        throw new HttpError(502, {
+          error: err instanceof Error ? err.message : "docker rm failed",
+        });
+      }
+    }
     this.records.delete(id);
     this.machines.delete(id);
+  }
+
+  async archiveHome(
+    id: string,
+    excludes: string[],
+    capBytes: number,
+  ): Promise<Buffer> {
+    if (!this.records.has(id)) {
+      throw new HttpError(404, { error: "unknown computer" });
+    }
+    const cname = `webmcp-${id}`;
+    // Resolve the guest home from uid 1000 (username is renamed per-boot, uid
+    // is stable), tar it gzipped to stdout, excluding caches/browser profile.
+    const excl = excludes.map((e) => `--exclude=./${e}`).join(" ");
+    const script = `H=$(getent passwd 1000 | cut -d: -f6); cd "$H" && tar czf - ${excl} .`;
+    const child = spawn("docker", ["exec", cname, "sh", "-c", script]);
+    return new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let total = 0;
+      let aborted = false;
+      let stderr = "";
+      child.stdout.on("data", (b: Buffer) => {
+        total += b.length;
+        if (total > capBytes) {
+          aborted = true;
+          child.kill("SIGKILL");
+          reject(
+            new HttpError(400, {
+              error: `home exceeds ${Math.round(capBytes / 1e6)}MB archive cap`,
+            }),
+          );
+          return;
+        }
+        chunks.push(b);
+      });
+      child.stderr.on("data", (b: Buffer) => {
+        stderr += b.toString();
+      });
+      child.on("error", (err) =>
+        reject(new HttpError(502, { error: err.message })),
+      );
+      child.on("close", (code) => {
+        if (aborted) return;
+        if (code !== 0) {
+          reject(new HttpError(502, { error: stderr || `tar exited ${code}` }));
+          return;
+        }
+        resolve(Buffer.concat(chunks));
+      });
+    });
+  }
+
+  async restoreHome(id: string, tar: Buffer): Promise<void> {
+    if (!this.records.has(id)) {
+      throw new HttpError(404, { error: "unknown computer" });
+    }
+    const cname = `webmcp-${id}`;
+    // Extract over the guest home; the browser profile is excluded from archives
+    // so this can't clobber a running Chromium. Fix ownership afterward.
+    const script = `H=$(getent passwd 1000 | cut -d: -f6); mkdir -p "$H" && tar xzf - -C "$H" && chown -R 1000:1000 "$H"`;
+    const child = spawn("docker", ["exec", "-i", cname, "sh", "-c", script]);
+    return new Promise<void>((resolve, reject) => {
+      let stderr = "";
+      child.stderr.on("data", (b: Buffer) => {
+        stderr += b.toString();
+      });
+      child.on("error", (err) =>
+        reject(new HttpError(502, { error: err.message })),
+      );
+      child.on("close", (code) => {
+        if (code === 0) resolve();
+        else reject(new HttpError(502, { error: stderr || `extract exited ${code}` }));
+      });
+      child.stdin.on("error", () => {
+        /* broken pipe if the child died; close handler reports it */
+      });
+      child.stdin.end(tar);
+    });
   }
 
   list(): ComputerRecord[] {
@@ -247,5 +464,13 @@ export class DockerHost implements ComputerHost {
 
   vncUrl(id: string): string | undefined {
     return this.records.get(id)?.vncUrl;
+  }
+
+  streamUrl(id: string): string | undefined {
+    return this.records.get(id)?.streamUrl;
+  }
+
+  streamAuth(id: string): string | undefined {
+    return this.records.get(id)?.streamAuth;
   }
 }

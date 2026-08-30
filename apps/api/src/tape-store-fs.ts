@@ -80,3 +80,22 @@ export function appendEvent(ev: TapeEvent): void {
     }
   }
 }
+
+// events.jsonl is append-only above; rewrite it to the capped in-memory set so
+// it doesn't grow without bound. Called on the retention interval.
+export function pruneTape(): void {
+  try {
+    ensureDir(ROOT);
+    const body = events
+      .slice()
+      .reverse()
+      .map((e) => JSON.stringify(e))
+      .join("\n");
+    fs.writeFileSync(
+      path.join(ROOT, "events.jsonl"),
+      body ? `${body}\n` : "",
+    );
+  } catch {
+    /* best-effort */
+  }
+}

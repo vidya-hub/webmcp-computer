@@ -67,4 +67,12 @@ export class MemoryHost implements ComputerHost {
   vncUrl(_id: string): string | undefined {
     return undefined;
   }
+
+  streamUrl(_id: string): string | undefined {
+    return undefined;
+  }
+
+  streamAuth(_id: string): string | undefined {
+    return undefined;
+  }
 }

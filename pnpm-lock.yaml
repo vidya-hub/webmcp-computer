@@ -16,6 +16,9 @@ importers:
       '@hono/node-server':
         specifier: ^1.19.9
         version: 1.19.17(hono@4.13.5)
+      '@smithy/node-http-handler':
+        specifier: ^4.11.3
+        version: 4.11.3
       '@webmcp-computer/contract':
         specifier: workspace:*
         version: link:../../packages/contract
@@ -99,6 +102,9 @@ importers:
       tailwindcss:
         specifier: ^4.3.3
         version: 4.3.3
+      uisfx:
+        specifier: ^0.4.0
+        version: 0.4.0
       usewebmcp:
         specifier: ^5.0.1
         version: 5.0.1(react@19.2.8)
@@ -127,6 +133,12 @@ importers:
 
   packages/contract:
     devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.12
       typescript:
         specifier: ~5.8.3
         version: 5.8.3
@@ -977,6 +989,9 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
+  uisfx@0.4.0:
+    resolution: {integrity: sha512-W891N75C09cvpaNeChP+7BiP0Yp5VSbrIcRgZvzpFUT3o/2DxZqROmUcX50oxeyMnY4Hqxu4jEfjndVUpmheEQ==}
+
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
@@ -1819,6 +1834,8 @@ snapshots:
       fsevents: 2.3.3
 
   typescript@5.8.3: {}
+
+  uisfx@0.4.0: {}
 
   undici-types@6.21.0: {}
 

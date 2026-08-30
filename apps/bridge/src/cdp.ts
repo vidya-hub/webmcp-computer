@@ -105,10 +105,18 @@ function cdpSend(
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
-    const timer = setTimeout(() => {
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       ws.close();
-      reject(new HttpError(502, { error: "cdp timed out" }));
-    }, timeoutMs);
+      fn();
+    };
+    const timer = setTimeout(
+      () => finish(() => reject(new HttpError(502, { error: "cdp timed out" }))),
+      timeoutMs,
+    );
     ws.addEventListener("open", () => {
       ws.send(JSON.stringify({ id: 1, method, params }));
     });
@@ -120,20 +128,19 @@ function cdpSend(
           error?: { message?: string };
         };
         if (msg.id !== 1) return;
-        clearTimeout(timer);
-        ws.close();
-        if (msg.error) {
-          reject(new HttpError(502, { error: msg.error.message ?? "cdp error" }));
-          return;
-        }
-        resolve(msg.result);
+        finish(() => {
+          if (msg.error) {
+            reject(new HttpError(502, { error: msg.error.message ?? "cdp error" }));
+          } else {
+            resolve(msg.result);
+          }
+        });
       } catch {
         /* */
       }
     });
     ws.addEventListener("error", () => {
-      clearTimeout(timer);
-      reject(new HttpError(502, { error: "browser not running" }));
+      finish(() => reject(new HttpError(502, { error: "browser not running" })));
     });
   });
 }
@@ -247,10 +254,21 @@ function pageNavigate(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
-    const timer = setTimeout(() => {
+    let settled = false;
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       ws.close();
-      reject(new HttpError(502, { error: "navigation timed out" }));
-    }, 5000);
+      fn();
+    };
+    const timer = setTimeout(
+      () =>
+        done(() =>
+          reject(new HttpError(502, { error: "navigation timed out" })),
+        ),
+      5000,
+    );
     let id = 0;
     ws.addEventListener("open", () => {
       id += 1;
@@ -277,23 +295,20 @@ function pageNavigate(
           error?: unknown;
         };
         if (msg.error) {
-          clearTimeout(timer);
-          ws.close();
-          reject(new HttpError(502, { error: "browser not running" }));
+          done(() =>
+            reject(new HttpError(502, { error: "browser not running" })),
+          );
           return;
         }
         if (msg.method === "Page.loadEventFired") {
-          clearTimeout(timer);
-          ws.close();
-          resolve();
+          done(() => resolve());
         }
       } catch {
         /* ignore non-json */
       }
     });
     ws.addEventListener("error", () => {
-      clearTimeout(timer);
-      reject(new HttpError(502, { error: "browser not running" }));
+      done(() => reject(new HttpError(502, { error: "browser not running" })));
     });
   });
 }

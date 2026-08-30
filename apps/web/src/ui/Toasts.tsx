@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActivityEvent } from "@webmcp-computer/contract";
-import { useStore } from "../store/index.ts";
+import { store, useStore } from "../store/index.ts";
 
 type Toast = { id: string; text: string; who: string };
 
@@ -30,10 +30,18 @@ export function Toasts() {
       who: `${e.actor}${e.computerId ? ` → ${e.computerId}` : ""}`,
       text: fmt(e),
     }));
-    setToasts((ts) => [...ts.slice(-2), ...next]);
+    setToasts((ts) => {
+      const merged = [...ts.slice(-2), ...next];
+      store.getState().setToastsVisible(merged.length > 0);
+      return merged;
+    });
     const ids = next.map((t) => t.id);
     const timer = window.setTimeout(() => {
-      setToasts((ts) => ts.filter((t) => !ids.includes(t.id)));
+      setToasts((ts) => {
+        const left = ts.filter((t) => !ids.includes(t.id));
+        store.getState().setToastsVisible(left.length > 0);
+        return left;
+      });
     }, 2600);
     return () => window.clearTimeout(timer);
   }, [activity]);
