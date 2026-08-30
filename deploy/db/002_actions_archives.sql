@@ -1,9 +1,8 @@
 -- Recipes (Teach & Replay) and home archives.
 --
--- 001_init.sql only runs on first DB init, so the API also creates these at
--- boot via ensureSchema() in apps/api/src/pg.ts. This file documents the schema
--- and can be applied by hand to an existing database:
---   psql "$DATABASE_URL" -f deploy/db/002_actions_archives.sql
+-- Applied by the migration runner (apps/api/src/migrate.ts) in numeric order and
+-- recorded in schema_migrations. `if not exists` keeps it safe over a legacy DB
+-- that predates the runner; 003 later recreates these with a NOT NULL user_id.
 
 create table if not exists recorded_actions (
   id text primary key,

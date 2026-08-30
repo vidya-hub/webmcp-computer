@@ -1,5 +1,7 @@
-# Dedicated Postgres for webmcp-computer (action tape + metadata).
-# Bound to host loopback only; the API (host systemd service) connects via 127.0.0.1.
+# Dedicated Postgres + Redis for webmcp-computer.
+# Both bound to host loopback only; the API + auth (host systemd services)
+# connect via 127.0.0.1. The API's migration runner (apps/api/src/migrate.ts) is
+# the authoritative schema owner; the initdb mount only seeds a brand-new volume.
 name: webmcp-computer
 services:
   postgres:
@@ -14,9 +16,25 @@ services:
       - "127.0.0.1:55432:5432"
     volumes:
       - webmcp-computer-pgdata:/var/lib/postgresql/data
-      - ./db/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ./db:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U webmcp -d webmcp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: webmcp-computer-redis
+    restart: unless-stopped
+    # appendonly so session/revocation state survives a restart on this host.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - webmcp-computer-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -24,3 +42,5 @@ services:
 volumes:
   webmcp-computer-pgdata:
     name: webmcp-computer-pgdata
+  webmcp-computer-redisdata:
+    name: webmcp-computer-redisdata
