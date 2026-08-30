@@ -317,20 +317,29 @@ export interface HomeArchive {
   createdAt: string;
 }
 
+// Every method is scoped to a session userId (multi-tenant control plane). The
+// userId is derived server-side from the auth cookie, never from the client.
 export interface ControlPlane {
-  listComputers(): Promise<Computer[]>;
-  workspace(): Promise<WorkspaceState>;
-  select(id: ComputerId, actor: Actor): Promise<WorkspaceState>;
-  spawn(spec: SpawnSpec, actor: Actor): Promise<Computer>;
-  destroy(id: ComputerId, actor: Actor): Promise<unknown>;
-  act(op: MachineOp, actor: Actor): Promise<unknown>;
+  listComputers(userId: string): Promise<Computer[]>;
+  workspace(userId: string): Promise<WorkspaceState>;
+  select(userId: string, id: ComputerId, actor: Actor): Promise<WorkspaceState>;
+  spawn(userId: string, spec: SpawnSpec, actor: Actor): Promise<Computer>;
+  destroy(userId: string, id: ComputerId, actor: Actor): Promise<unknown>;
+  act(userId: string, op: MachineOp, actor: Actor): Promise<unknown>;
   resolveApproval(
+    userId: string,
     id: string,
     decision: "approved" | "rejected",
   ): Promise<Approval>;
-  resolveChoice(id: string, choice: string): Promise<Approval>;
-  rename(id: ComputerId, name: string, actor: Actor): Promise<Computer>;
+  resolveChoice(userId: string, id: string, choice: string): Promise<Approval>;
+  rename(
+    userId: string,
+    id: ComputerId,
+    name: string,
+    actor: Actor,
+  ): Promise<Computer>;
   requestChoice(
+    userId: string,
     question: string,
     options: string[],
     actor: Actor,

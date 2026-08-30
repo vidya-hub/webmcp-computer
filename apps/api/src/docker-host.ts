@@ -16,9 +16,14 @@ import {
 import { HttpError } from "./http-error.ts";
 import type { ComputerHost, ComputerRecord } from "./host.ts";
 import { HttpMachine } from "./http-machine.ts";
+import { pool } from "./pg.ts";
+import { redis } from "./redis.ts";
 
 const execFileAsync = promisify(execFile);
 const IMAGE = process.env.COMPUTER_IMAGE ?? "webmcp-slim:local";
+const WORKER_ID = process.env.WORKER_ID ?? "worker-0";
+const SKU = "desktop.standard";
+const DEFAULT_QUOTA = Number(process.env.DEFAULT_QUOTA_COMPUTERS ?? 4);
 
 function vncUrlFor(port: string, imageName = IMAGE): string {
   const scheme =
@@ -156,6 +161,20 @@ export class DockerHost implements ComputerHost {
         continue;
       }
       try {
+        // Owner label is the tenancy key. A container from before this pass has
+        // none — remove it (approved 003 leftover policy); never adopt an
+        // unowned guest into a tenant's view.
+        const { stdout: ownerOut } = await dk([
+          "inspect",
+          "-f",
+          '{{index .Config.Labels "webmcp.owner"}}',
+          cname,
+        ]);
+        const ownerId = ownerOut.trim();
+        if (!ownerId || ownerId === "<no value>") {
+          await dk(["rm", "-f", cname]).catch(() => undefined);
+          continue;
+        }
         const { stdout: envOut } = await dk([
           "inspect",
           "-f",
@@ -184,6 +203,7 @@ export class DockerHost implements ComputerHost {
           os: "Ubuntu 24.04",
           role: "computer",
           wallpaper,
+          ownerId,
           vncUrl: vncUrlFor(vnc, imageOut.trim()),
           streamUrl: streamPort ? streamUrlFor(streamPort) : undefined,
           streamAuth:
@@ -204,13 +224,13 @@ export class DockerHost implements ComputerHost {
   }
 
   async spawn(
+    ownerId: string,
     spec: SpawnSpec,
   ): Promise<{ record: ComputerRecord; machine: Machine }> {
-    // Reserve a slot synchronously (before any await) so N concurrent spawns
-    // can't all pass the cap check and overshoot MAX_COMPUTERS, and can't
-    // collide on the same generated name.
+    // Worker capacity for THIS box (503 worker full) — distinct from the
+    // per-user DB quota (429), which reserveQuota enforces.
     if (this.records.size + this.pending >= maxComputers()) {
-      throw new HttpError(409, { error: "computer cap reached" });
+      throw new HttpError(503, { error: "worker full" });
     }
     let allocated: { id: string; name: string };
     try {
@@ -224,14 +244,65 @@ export class DockerHost implements ComputerHost {
     this.pending += 1;
     this.pendingIds.add(allocated.id);
     try {
-      return await this.spawnReserved(spec, allocated);
+      // Atomically check the per-user quota and insert the computers row under a
+      // short Redis lock; the row is the durable concurrent-spawn guard.
+      await this.reserveQuota(ownerId, allocated.id, allocated.name);
+      try {
+        return await this.spawnReserved(ownerId, spec, allocated);
+      } catch (err) {
+        await pool
+          .query("delete from computers where id = $1 and user_id = $2", [
+            allocated.id,
+            ownerId,
+          ])
+          .catch(() => undefined);
+        throw err;
+      }
     } finally {
       this.pending -= 1;
       this.pendingIds.delete(allocated.id);
     }
   }
 
+  // Redis lock guards only the quota read + row insert (fast); it is released
+  // before the long docker run. The inserted computers row (status 'starting')
+  // is what a concurrent spawn counts against, so quota holds without holding
+  // the lock across the whole spawn.
+  private async reserveQuota(
+    ownerId: string,
+    id: string,
+    name: string,
+  ): Promise<void> {
+    const lockKey = `spawn:${ownerId}`;
+    const locked = await redis.set(lockKey, "1", "EX", 30, "NX");
+    if (!locked) {
+      throw new HttpError(429, { error: "spawn in progress" });
+    }
+    try {
+      const { rows } = await pool.query<{ max_computers: number }>(
+        "select max_computers from quotas where user_id = $1",
+        [ownerId],
+      );
+      const max = rows[0]?.max_computers ?? DEFAULT_QUOTA;
+      const { rows: cnt } = await pool.query<{ n: number }>(
+        "select count(*)::int as n from computers where user_id = $1",
+        [ownerId],
+      );
+      if ((cnt[0]?.n ?? 0) >= max) {
+        throw new HttpError(429, { error: "quota" });
+      }
+      await pool.query(
+        `insert into computers (id, user_id, worker_id, sku, name, status)
+         values ($1,$2,$3,$4,$5,'starting')`,
+        [id, ownerId, WORKER_ID, SKU, name],
+      );
+    } finally {
+      await redis.del(lockKey).catch(() => undefined);
+    }
+  }
+
   private async spawnReserved(
+    ownerId: string,
     spec: SpawnSpec,
     allocated: { id: string; name: string },
   ): Promise<{ record: ComputerRecord; machine: Machine }> {
@@ -253,6 +324,10 @@ export class DockerHost implements ComputerHost {
           cname,
           "--label",
           "webmcp.computer=1",
+          "--label",
+          `webmcp.owner=${ownerId}`,
+          "--label",
+          `webmcp.sku=${SKU}`,
           "--shm-size",
           COMPUTER_SHM,
           "--memory",
@@ -316,6 +391,7 @@ export class DockerHost implements ComputerHost {
       os: "Ubuntu 24.04",
       role: spec.role?.trim() || "computer",
       wallpaper,
+      ownerId,
       vncUrl: vncUrlFor(vnc, IMAGE),
       streamUrl: streamUrlFor(stream),
       streamAuth: streamAuthFor(token),
@@ -328,6 +404,12 @@ export class DockerHost implements ComputerHost {
       await waitHealthy(bridge, 60_000);
       await waitSelkies(stream, token, 20_000);
       record.status = "running";
+      await pool
+        .query(
+          "update computers set status = 'running' where id = $1 and user_id = $2",
+          [allocated.id, ownerId],
+        )
+        .catch(() => undefined);
       this.publishRecord(record);
     } catch (err) {
       // A failed health check must not leave a running container that burns a
@@ -346,8 +428,9 @@ export class DockerHost implements ComputerHost {
     return { record, machine };
   }
 
-  async destroy(id: string): Promise<void> {
-    if (!this.records.has(id)) {
+  async destroy(ownerId: string, id: string): Promise<void> {
+    const rec = this.records.get(id);
+    if (!rec || rec.ownerId !== ownerId) {
       throw new HttpError(404, { error: "unknown computer" });
     }
     const cname = `webmcp-${id}`;
@@ -361,8 +444,7 @@ export class DockerHost implements ComputerHost {
         () => false,
       );
       if (still) {
-        const rec = this.records.get(id);
-        if (rec) rec.status = "error";
+        rec.status = "error";
         throw new HttpError(502, {
           error: err instanceof Error ? err.message : "docker rm failed",
         });
@@ -370,6 +452,12 @@ export class DockerHost implements ComputerHost {
     }
     this.records.delete(id);
     this.machines.delete(id);
+    await pool
+      .query("delete from computers where id = $1 and user_id = $2", [
+        id,
+        ownerId,
+      ])
+      .catch(() => undefined);
   }
 
   async archiveHome(
@@ -450,16 +538,21 @@ export class DockerHost implements ComputerHost {
     });
   }
 
-  list(): ComputerRecord[] {
-    return [...this.records.values()];
+  list(ownerId: string): ComputerRecord[] {
+    return [...this.records.values()].filter((r) => r.ownerId === ownerId);
   }
 
-  machine(id: string): Machine | undefined {
-    return this.machines.get(id);
+  private owned(ownerId: string, id: string): ComputerRecord | undefined {
+    const r = this.records.get(id);
+    return r && r.ownerId === ownerId ? r : undefined;
   }
 
-  record(id: string): ComputerRecord | undefined {
-    return this.records.get(id);
+  machine(ownerId: string, id: string): Machine | undefined {
+    return this.owned(ownerId, id) ? this.machines.get(id) : undefined;
+  }
+
+  record(ownerId: string, id: string): ComputerRecord | undefined {
+    return this.owned(ownerId, id);
   }
 
   vncUrl(id: string): string | undefined {

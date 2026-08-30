@@ -1,6 +1,7 @@
 import { getRequestListener } from "@hono/node-server";
-import { type Actor, type MachineOp } from "@webmcp-computer/contract";
+import { type MachineOp } from "@webmcp-computer/contract";
 import { Hono } from "hono";
+import crypto from "node:crypto";
 import { cors } from "hono/cors";
 import httpProxy from "http-proxy";
 import { execFile } from "node:child_process";
@@ -23,6 +24,25 @@ import {
   originAllowed,
 } from "./desktop-route.ts";
 import { injectSelkiesCapture } from "./selkies-capture.ts";
+import {
+  type AppEnv,
+  actorOf,
+  requireAuth,
+  userIdFromCookieHeader,
+  userIdOf,
+} from "./auth-middleware.ts";
+import { redis } from "./redis.ts";
+import {
+  MemoryWorkspace,
+  RedisWorkspace,
+  type WorkspaceStore,
+} from "./workspace-store.ts";
+
+// Per-user workspace: Redis in production (replica-safe), in-memory for dev.
+function workspaceStore(): WorkspaceStore {
+  if (process.env.REDIS_URL || IS_PROD) return new RedisWorkspace(redis);
+  return new MemoryWorkspace();
+}
 
 process.on("unhandledRejection", (err) => {
   console.error("unhandledRejection:", err);
@@ -36,6 +56,31 @@ process.on("uncaughtException", (err) => {
 const execFileAsync = promisify(execFile);
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST_BACKEND = (process.env.HOST_BACKEND ?? "auto").toLowerCase();
+
+// Production = auth is required or the docker backend is pinned. In production
+// missing dependencies are fatal: we exit so systemd restarts us rather than
+// serving a degraded, single-tenant, or MemoryHost-backed lab.
+const AUTH_REQUIRED =
+  (process.env.AUTH_REQUIRED ?? "").toLowerCase() === "true";
+const IS_PROD = AUTH_REQUIRED || HOST_BACKEND === "docker";
+
+function fatal(msg: string): never {
+  console.error(`FATAL: ${msg}`);
+  process.exit(1);
+}
+
+// An accidental restart with docker but without AUTH_REQUIRED serves every
+// request as a single dev tenant (requireAuth's dev fallback). That's the
+// intended safety net, but it must be loud. Flip AUTH_REQUIRED=true only once
+// the SPA AuthGate ships.
+if (HOST_BACKEND === "docker" && !AUTH_REQUIRED) {
+  console.warn(
+    "WARNING: HOST_BACKEND=docker but AUTH_REQUIRED is not true — all requests act as a single tenant (dev-user).",
+  );
+}
+if (AUTH_REQUIRED && !process.env.JWT_SECRET) {
+  fatal("AUTH_REQUIRED=true but JWT_SECRET is missing");
+}
 
 // Origins allowed to drive the control plane from a browser. The deployed
 // Tailscale origin must be listed here (deploy/.env ALLOWED_ORIGINS=...) or the
@@ -108,13 +153,23 @@ async function pickHost(): Promise<ComputerHost> {
 
 let plane!: Plane;
 
-const app = new Hono();
+const app = new Hono<AppEnv>();
+
+// Request id in and out, for correlating structured logs.
+app.use("*", async (c, next) => {
+  const id = c.req.header("x-request-id") ?? crypto.randomUUID();
+  c.set("requestId", id);
+  c.header("x-request-id", id);
+  return next();
+});
 
 app.use(
   "*",
   cors({
     origin: [...ALLOWED_ORIGINS],
-    allowHeaders: ["content-type", "x-actor"],
+    // Cookies carry the session; the browser must be allowed to send them.
+    credentials: true,
+    allowHeaders: ["content-type"],
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   }),
 );
@@ -136,8 +191,30 @@ app.use("/api/*", async (c, next) => {
 app.get("/health", (c) => c.json({ ok: true }));
 app.get("/api/health", (c) => c.json({ ok: true }));
 
+// Readiness: dependencies up. The load balancer routes on this, not /health.
+app.get("/api/ready", async (c) => {
+  const [{ pingPg }, { pingRedis }] = await Promise.all([
+    import("./pg.ts"),
+    import("./redis.ts"),
+  ]);
+  const needsData = !!process.env.DATABASE_URL || IS_PROD;
+  const [pg, redis] = await Promise.all([
+    needsData ? pingPg() : Promise.resolve(true),
+    needsData ? pingRedis() : Promise.resolve(true),
+  ]);
+  const ok = pg && redis;
+  return c.json({ ok, pg, redis }, ok ? 200 : 503);
+});
+
+// Session gate for the whole control-plane API (health/ready stay open).
+app.use("/api/*", async (c, next) => {
+  const p = c.req.path;
+  if (p === "/api/health" || p === "/api/ready") return next();
+  return requireAuth(c, next);
+});
+
 app.get("/api/tape", async (c) => {
-  return c.json({ events: await listTape() });
+  return c.json({ events: await listTape(userIdOf(c)) });
 });
 
 app.get("/api/tape/:id/:side", async (c) => {
@@ -145,7 +222,7 @@ app.get("/api/tape/:id/:side", async (c) => {
   if (side !== "before" && side !== "after") {
     return c.json({ error: "before or after" }, 400);
   }
-  const buf = await getShot(c.req.param("id"), side);
+  const buf = await getShot(userIdOf(c), c.req.param("id"), side);
   if (!buf) return c.body(null, 404);
   return new Response(buf, {
     headers: { "content-type": "image/png", "cache-control": "private, max-age=3600" },
@@ -154,11 +231,11 @@ app.get("/api/tape/:id/:side", async (c) => {
 
 // --- Recorded actions (recipes) ---
 app.get("/api/actions", async (c) => {
-  return c.json({ actions: await plane.listActions() });
+  return c.json({ actions: await plane.listActions(userIdOf(c)) });
 });
 
 app.get("/api/actions/:id", async (c) => {
-  const a = await plane.getRecordedAction(c.req.param("id"));
+  const a = await plane.getRecordedAction(userIdOf(c), c.req.param("id"));
   if (!a) return c.json({ error: "not found" }, 404);
   return c.json(a);
 });
@@ -175,6 +252,7 @@ app.post("/api/actions", async (c) => {
     }
     return c.json(
       await plane.saveRecordedAction(
+        userIdOf(c),
         {
           name: body.name,
           description: body.description,
@@ -200,6 +278,7 @@ app.post("/api/actions/promote", async (c) => {
     }
     return c.json(
       await plane.promoteRecent(
+        userIdOf(c),
         Number(body.count ?? 10),
         body.name,
         body.description ?? "",
@@ -215,6 +294,7 @@ app.post("/api/actions/:id/replay", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as { speed?: number };
     return c.json(
       await plane.replayRecordedAction(
+        userIdOf(c),
         { actionId: c.req.param("id") },
         Number(body.speed ?? 1),
         actorOf(c),
@@ -227,7 +307,9 @@ app.post("/api/actions/:id/replay", async (c) => {
 
 app.delete("/api/actions/:id", async (c) => {
   try {
-    return c.json(await plane.deleteRecordedAction(c.req.param("id")));
+    return c.json(
+      await plane.deleteRecordedAction(userIdOf(c), c.req.param("id")),
+    );
   } catch (err) {
     return handleError(c, err);
   }
@@ -243,9 +325,9 @@ const RECORD_INPUT_KINDS = new Set([
   "wait",
 ]);
 
-app.post("/api/record/start", (c) => {
+app.post("/api/record/start", async (c) => {
   try {
-    return c.json(plane.recordStart(actorOf(c)));
+    return c.json(await plane.recordStart(userIdOf(c), actorOf(c)));
   } catch (err) {
     return handleError(c, err);
   }
@@ -258,13 +340,15 @@ app.post("/api/record/event", async (c) => {
       throw new HttpError(400, { error: "invalid record step" });
     }
     // The API stamps `t` on accept; any client-supplied t/computerId is ignored.
-    return c.json(plane.recordEvent(step, actorOf(c)));
+    return c.json(await plane.recordEvent(userIdOf(c), step, actorOf(c)));
   } catch (err) {
     return handleError(c, err);
   }
 });
 
-app.get("/api/record/status", (c) => c.json(plane.recordStatus()));
+app.get("/api/record/status", async (c) =>
+  c.json(await plane.recordStatus(userIdOf(c))),
+);
 
 app.post("/api/record/stop", async (c) => {
   try {
@@ -276,7 +360,12 @@ app.post("/api/record/stop", async (c) => {
       throw new HttpError(400, { error: "name required" });
     }
     return c.json(
-      await plane.recordStop(body.name, body.description ?? "", actorOf(c)),
+      await plane.recordStop(
+        userIdOf(c),
+        body.name,
+        body.description ?? "",
+        actorOf(c),
+      ),
     );
   } catch (err) {
     return handleError(c, err);
@@ -285,19 +374,19 @@ app.post("/api/record/stop", async (c) => {
 
 // --- Home archives ---
 app.get("/api/archives", async (c) => {
-  return c.json({ archives: await plane.listArchives() });
+  return c.json({ archives: await plane.listArchives(userIdOf(c)) });
 });
 
 app.delete("/api/archives/:id", async (c) => {
   try {
-    return c.json(await plane.deleteArchive(c.req.param("id")));
+    return c.json(await plane.deleteArchive(userIdOf(c), c.req.param("id")));
   } catch (err) {
     return handleError(c, err);
   }
 });
 
 app.get("/api/computers", async (c) => {
-  return c.json({ computers: await plane.listComputers() });
+  return c.json({ computers: await plane.listComputers(userIdOf(c)) });
 });
 
 app.post("/api/computers", async (c) => {
@@ -307,7 +396,7 @@ app.post("/api/computers", async (c) => {
       role?: string;
       restoreArchiveId?: string;
     };
-    return c.json(await plane.spawn(body, actorOf(c)), 201);
+    return c.json(await plane.spawn(userIdOf(c), body, actorOf(c)), 201);
   } catch (err) {
     return handleError(c, err);
   }
@@ -315,7 +404,7 @@ app.post("/api/computers", async (c) => {
 
 app.delete("/api/computers/:id", async (c) => {
   try {
-    return c.json(await plane.destroy(c.req.param("id"), actorOf(c)));
+    return c.json(await plane.destroy(userIdOf(c), c.req.param("id"), actorOf(c)));
   } catch (err) {
     return handleError(c, err);
   }
@@ -327,7 +416,9 @@ app.post("/api/computers/:id/name", async (c) => {
     if (typeof body.name !== "string") {
       throw new HttpError(400, { error: "name required" });
     }
-    return c.json(await plane.rename(c.req.param("id"), body.name, actorOf(c)));
+    return c.json(
+      await plane.rename(userIdOf(c), c.req.param("id"), body.name, actorOf(c)),
+    );
   } catch (err) {
     return handleError(c, err);
   }
@@ -341,6 +432,7 @@ app.post("/api/choice", async (c) => {
     };
     return c.json(
       await plane.requestChoice(
+        userIdOf(c),
         String(body.question ?? ""),
         Array.isArray(body.options) ? body.options.map(String) : [],
         actorOf(c),
@@ -351,7 +443,9 @@ app.post("/api/choice", async (c) => {
   }
 });
 
-app.get("/api/workspace", async (c) => c.json(await plane.workspace()));
+app.get("/api/workspace", async (c) =>
+  c.json(await plane.workspace(userIdOf(c))),
+);
 
 app.post("/api/workspace/select", async (c) => {
   try {
@@ -360,7 +454,7 @@ app.post("/api/workspace/select", async (c) => {
     if (typeof id !== "string" || !id.trim()) {
       throw new HttpError(400, { error: "computerId required" });
     }
-    return c.json(await plane.select(id.trim(), actorOf(c)));
+    return c.json(await plane.select(userIdOf(c), id.trim(), actorOf(c)));
   } catch (err) {
     return handleError(c, err);
   }
@@ -372,7 +466,7 @@ app.post("/api/act", async (c) => {
     if (!op || typeof op !== "object" || typeof op.op !== "string") {
       throw new HttpError(400, { error: "invalid op" });
     }
-    return c.json(await plane.act(op, actorOf(c)));
+    return c.json(await plane.act(userIdOf(c), op, actorOf(c)));
   } catch (err) {
     return handleError(c, err);
   }
@@ -380,7 +474,9 @@ app.post("/api/act", async (c) => {
 
 app.post("/api/approvals/:id/approve", async (c) => {
   try {
-    return c.json(await plane.resolveApproval(c.req.param("id"), "approved"));
+    return c.json(
+      await plane.resolveApproval(userIdOf(c), c.req.param("id"), "approved"),
+    );
   } catch (err) {
     return handleError(c, err);
   }
@@ -388,7 +484,9 @@ app.post("/api/approvals/:id/approve", async (c) => {
 
 app.post("/api/approvals/:id/reject", async (c) => {
   try {
-    return c.json(await plane.resolveApproval(c.req.param("id"), "rejected"));
+    return c.json(
+      await plane.resolveApproval(userIdOf(c), c.req.param("id"), "rejected"),
+    );
   } catch (err) {
     return handleError(c, err);
   }
@@ -400,24 +498,23 @@ app.post("/api/approvals/:id/choose", async (c) => {
     if (typeof body.choice !== "string") {
       throw new HttpError(400, { error: "choice required" });
     }
-    return c.json(await plane.resolveChoice(c.req.param("id"), body.choice));
+    return c.json(
+      await plane.resolveChoice(userIdOf(c), c.req.param("id"), body.choice),
+    );
   } catch (err) {
     return handleError(c, err);
   }
 });
-
-function actorOf(c: { req: { header: (name: string) => string | undefined } }): Actor {
-  const h = c.req.header("x-actor");
-  if (h === "human" || h === "agent" || h === "system") return h;
-  return "agent";
-}
 
 function handleError(
   c: { json: (b: unknown, s?: number) => Response },
   err: unknown,
 ) {
   if (err instanceof HttpError) {
-    return c.json(err.body, err.status as 400 | 403 | 404 | 409 | 500 | 502);
+    return c.json(
+      err.body,
+      err.status as 400 | 403 | 404 | 409 | 429 | 500 | 502 | 503,
+    );
   }
   // Unexpected errors were previously a black hole — every 500 is now logged.
   console.error("api error:", err);
@@ -706,6 +803,68 @@ function desktopMatch(url: string): { id: string; rest: string } | null {
   return { id: decodeURIComponent(m[1]), rest: pathPart + query };
 }
 
+// Serve a desktop HTTP sub-request. Called only after Origin + session + owner
+// checks pass, so it can trust the request is for a computer this user owns.
+function serveDesktop(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  parsed: { id: string; rest: string },
+): void {
+  const vncTarget = plane.vncUrl(parsed.id);
+  const streamTarget = plane.streamUrl(parsed.id);
+  const streamAuth = plane.streamAuth(parsed.id);
+  const kind = classifyDesktop(parsed.rest, Boolean(streamTarget));
+  if (kind === "package-stub") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end('{"name":"novnc","version":"1.3.0"}');
+    return;
+  }
+  if (kind === "html-rfb") {
+    if (!vncTarget) {
+      res.writeHead(502, { "content-type": "text/plain" });
+      res.end("desktop offline");
+      return;
+    }
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "private, no-store",
+      "content-security-policy": FRAME_ANCESTORS,
+      "permissions-policy": DESKTOP_PERMISSIONS,
+    });
+    res.end(vncViewerHtml());
+    return;
+  }
+  if (kind === "html-stream") {
+    if (!streamTarget) {
+      res.writeHead(502, { "content-type": "text/plain" });
+      res.end("desktop offline");
+      return;
+    }
+    void serveSelkiesHtml(res, streamTarget, streamAuth, parsed.rest);
+    return;
+  }
+  if (kind === "selkies") {
+    if (!streamTarget) {
+      res.writeHead(502, { "content-type": "text/plain" });
+      res.end("desktop offline");
+      return;
+    }
+    req.url = parsed.rest;
+    if (streamAuth) req.headers.authorization = streamAuth;
+    proxyFor(streamTarget).web(req, res, {}, (err) => failDesktop(err, req, res));
+    return;
+  }
+  // novnc leftovers (websockify static, core/*)
+  if (!vncTarget) {
+    res.writeHead(502, { "content-type": "text/plain" });
+    res.end("desktop offline");
+    return;
+  }
+  req.url = parsed.rest;
+  req.headers.authorization = VNC_AUTH;
+  proxyFor(vncTarget).web(req, res, {}, (err) => failDesktop(err, req, res));
+}
+
 const honoListener = getRequestListener(app.fetch);
 const server = http.createServer((req, res) => {
   const slash = (req.url ?? "").match(/^\/desktops\/([^/?#]+)(\?.*)?$/);
@@ -727,86 +886,61 @@ const server = http.createServer((req, res) => {
       res.end("origin not allowed");
       return;
     }
-    const vncTarget = plane.vncUrl(parsed.id);
-    const streamTarget = plane.streamUrl(parsed.id);
-    const streamAuth = plane.streamAuth(parsed.id);
-    const kind = classifyDesktop(parsed.rest, Boolean(streamTarget));
-    if (kind === "package-stub") {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end('{"name":"novnc","version":"1.3.0"}');
-      return;
-    }
-    if (kind === "html-rfb") {
-      if (!vncTarget) {
-        res.writeHead(502, { "content-type": "text/plain" });
-        res.end("desktop offline");
-        return;
-      }
-      res.writeHead(200, {
-        "content-type": "text/html; charset=utf-8",
-        "cache-control": "private, no-store",
-        "content-security-policy": FRAME_ANCESTORS,
-        "permissions-policy": DESKTOP_PERMISSIONS,
+    // Session + ownership gate: only the owner can reach their computer's
+    // stream. The wc_at cookie rides the same-origin request.
+    void userIdFromCookieHeader(req.headers.cookie)
+      .then((userId) => {
+        if (!userId) {
+          res.writeHead(401, { "content-type": "text/plain" });
+          res.end("unauthenticated");
+          return;
+        }
+        if (!plane.owns(userId, parsed.id)) {
+          res.writeHead(404, { "content-type": "text/plain" });
+          res.end("not found");
+          return;
+        }
+        serveDesktop(req, res, parsed);
+      })
+      .catch(() => {
+        try {
+          res.writeHead(500);
+          res.end();
+        } catch {
+          /* already sent */
+        }
       });
-      res.end(vncViewerHtml());
-      return;
-    }
-    if (kind === "html-stream") {
-      if (!streamTarget) {
-        res.writeHead(502, { "content-type": "text/plain" });
-        res.end("desktop offline");
-        return;
-      }
-      void serveSelkiesHtml(res, streamTarget, streamAuth, parsed.rest);
-      return;
-    }
-    if (kind === "selkies") {
-      if (!streamTarget) {
-        res.writeHead(502, { "content-type": "text/plain" });
-        res.end("desktop offline");
-        return;
-      }
-      req.url = parsed.rest;
-      if (streamAuth) req.headers.authorization = streamAuth;
-      proxyFor(streamTarget).web(req, res, {}, (err) =>
-        failDesktop(err, req, res),
-      );
-      return;
-    }
-    // novnc leftovers (websockify static, core/*)
-    if (!vncTarget) {
-      res.writeHead(502, { "content-type": "text/plain" });
-      res.end("desktop offline");
-      return;
-    }
-    req.url = parsed.rest;
-    req.headers.authorization = VNC_AUTH;
-    proxyFor(vncTarget).web(req, res, {}, (err) => failDesktop(err, req, res));
     return;
   }
   honoListener(req, res);
 });
 
 const wss = new WebSocketServer({ noServer: true });
-const sockets = new Set<WebSocket>();
-
-wss.on("connection", (ws) => {
-  sockets.add(ws);
-  ws.on("close", () => sockets.delete(ws));
-});
+// Each event-feed socket is bound to the userId resolved from its cookie at
+// upgrade, so a user only ever receives their own events.
+const socketUser = new Map<WebSocket, string>();
 
 server.on("upgrade", (req, socket, head) => {
   const url = req.url ?? "";
   if (url.startsWith("/api/ws")) {
     // WebSockets are exempt from CORS; an unchecked upgrade would let any page
-    // stream the event feed (approval IDs, commands). Enforce Origin here.
+    // stream the event feed (approval IDs, commands). Enforce Origin + session.
     if (!originOk(req.headers.origin)) {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit("connection", ws, req);
-    });
+    void userIdFromCookieHeader(req.headers.cookie)
+      .then((userId) => {
+        if (!userId) {
+          socket.destroy();
+          return;
+        }
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          socketUser.set(ws, userId);
+          ws.on("close", () => socketUser.delete(ws));
+        });
+      })
+      .catch(() => socket.destroy());
     return;
   }
   const parsed = desktopMatch(url);
@@ -819,6 +953,29 @@ server.on("upgrade", (req, socket, head) => {
       socket.destroy();
       return;
     }
+    // Session + ownership gate on the desktop stream upgrade too.
+    void userIdFromCookieHeader(req.headers.cookie)
+      .then((userId) => {
+        if (!userId || !plane.owns(userId, parsed.id)) {
+          socket.destroy();
+          return;
+        }
+        proxyDesktopWs(req, socket, head, parsed);
+      })
+      .catch(() => socket.destroy());
+    return;
+  }
+  socket.destroy();
+});
+
+// Proxy an owner-approved desktop WS upgrade to the guest.
+function proxyDesktopWs(
+  req: http.IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+  parsed: { id: string; rest: string },
+): void {
+  {
     const vncTarget = plane.vncUrl(parsed.id);
     const streamTarget = plane.streamUrl(parsed.id);
     const streamAuth = plane.streamAuth(parsed.id);
@@ -845,28 +1002,44 @@ server.on("upgrade", (req, socket, head) => {
     } else {
       proxyFor(target).ws(req, socket, head);
     }
-    return;
   }
-  socket.destroy();
-});
+}
 
 void (async () => {
-  plane = new Plane(await pickHost());
-  plane.subscribe((event) => {
+  plane = new Plane(await pickHost(), workspaceStore());
+  plane.subscribe((userId, event) => {
     const payload = JSON.stringify(event);
-    for (const ws of sockets) {
-      if (ws.readyState === ws.OPEN) ws.send(payload);
+    for (const [ws, uid] of socketUser) {
+      if (uid === userId && ws.readyState === ws.OPEN) ws.send(payload);
     }
   });
-  await plane.boot().catch((err: unknown) => {
-    console.error("boot spawn failed:", err);
-  });
-  // Best-effort: create the recipe/archive tables (no-op if DATABASE_URL unset).
+  // Schema is owned by numbered migrations. In production the database and Redis
+  // are required; a failure here is fatal (systemd restarts us).
   if (process.env.DATABASE_URL) {
-    await import("./pg.ts")
-      .then((m) => m.ensureSchema())
-      .catch((err: unknown) => console.error("schema bootstrap:", err));
+    try {
+      const { migrate } = await import("./migrate.ts");
+      await migrate();
+    } catch (err) {
+      if (IS_PROD) fatal(`migration failed: ${String(err)}`);
+      console.error("migration failed (dev, continuing):", err);
+    }
+  } else if (IS_PROD) {
+    fatal("DATABASE_URL is required in production");
   }
+
+  if (process.env.REDIS_URL || IS_PROD) {
+    try {
+      const { connectRedis } = await import("./redis.ts");
+      await connectRedis();
+    } catch (err) {
+      if (IS_PROD) fatal(`redis connect failed: ${String(err)}`);
+      console.error("redis connect failed (dev, continuing):", err);
+    }
+  }
+
+  await plane.boot().catch((err: unknown) => {
+    console.error("boot failed:", err);
+  });
   startRetention();
   server.listen(PORT, "127.0.0.1", () => {
     console.log(`control plane http://127.0.0.1:${PORT}`);
@@ -879,14 +1052,14 @@ function shutdown(signal: string): void {
   shuttingDown = true;
   console.log(`received ${signal}, shutting down`);
   try {
-    plane.discardRecording();
+    plane.discardAllRecordings();
   } catch {
     // plane may not be assigned if boot never finished
   }
   // Hard deadline so a stuck close can't hang the unit forever.
   const deadline = setTimeout(() => process.exit(0), 5_000);
   deadline.unref();
-  for (const ws of sockets) {
+  for (const ws of socketUser.keys()) {
     try {
       ws.close(1001, "server shutting down");
     } catch {

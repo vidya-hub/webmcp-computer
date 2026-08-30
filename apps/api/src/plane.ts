@@ -35,6 +35,11 @@ import {
   listArchives,
   putArchive,
 } from "./archive-store.ts";
+import {
+  MemoryWorkspace,
+  RECORD_MAX_STEPS,
+  type WorkspaceStore,
+} from "./workspace-store.ts";
 
 const ACTIVITY_CAP = 100;
 const APPROVAL_MS = 120_000;
@@ -218,7 +223,7 @@ function publicComputer(r: ComputerRecord): Computer {
   };
 }
 
-type Listener = (event: WsEvent) => void;
+type Listener = (userId: string, event: WsEvent) => void;
 
 type Waiter = {
   approval: Approval;
@@ -226,22 +231,25 @@ type Waiter = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+const RECORD_MAX_MS = 10 * 60_000;
+
 export class Plane implements ControlPlane {
-  private selected: ComputerId | null = null;
-  private activity: ActivityEvent[] = [];
-  private waiter: Waiter | null = null;
-  private lastChoice: string | null = null;
-  private recording: {
-    computerId: ComputerId;
-    t0: number;
-    steps: RecipeStep[];
-    timer: ReturnType<typeof setTimeout>;
-  } | null = null;
+  // Approval Promises (the parked /api/act request) are process-local, keyed by
+  // userId. All other per-user state — selection, the approval DTO, the live
+  // recording, and activity — lives in the WorkspaceStore so it is replica-safe.
+  private readonly waiters = new Map<string, Waiter>();
+  private readonly recTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly listeners = new Set<Listener>();
 
-  constructor(private readonly host: ComputerHost) {
+  constructor(
+    private readonly host: ComputerHost,
+    private readonly ws: WorkspaceStore = new MemoryWorkspace(),
+  ) {
     this.host.subscribeRecords?.((record) => {
-      this.emit({ type: "computer", computer: publicComputer(record) });
+      this.emit(record.ownerId, {
+        type: "computer",
+        computer: publicComputer(record),
+      });
     });
   }
 
@@ -262,38 +270,56 @@ export class Plane implements ControlPlane {
     return this.host.streamAuth?.(id);
   }
 
-  async boot(): Promise<void> {
-    this.selected = this.host.list()[0]?.id ?? null;
+  /** Does this user own this computer? Used by the desktop-route owner gate. */
+  owns(userId: string, id: ComputerId): boolean {
+    return !!this.host.record(userId, id);
   }
 
-  async listComputers(): Promise<Computer[]> {
-    return this.host.list().map(publicComputer);
+  // No global boot selection: each user's workspace is empty until they select.
+  async boot(): Promise<void> {}
+
+  async listComputers(userId: string): Promise<Computer[]> {
+    return this.host.list(userId).map(publicComputer);
   }
 
-  async workspace(): Promise<WorkspaceState> {
-    const computers = await this.listComputers();
+  async workspace(userId: string): Promise<WorkspaceState> {
+    const computers = await this.listComputers(userId);
+    const [selected, approval, recording, activity] = await Promise.all([
+      this.ws.getSelected(userId),
+      this.ws.getApproval(userId),
+      this.ws.getRecording(userId),
+      this.ws.getActivity(userId),
+    ]);
     return {
-      selectedComputer: this.selected,
-      pendingApproval: this.waiter?.approval ?? null,
+      selectedComputer: selected,
+      pendingApproval: approval,
       computersRunning: computers.filter((c) => c.status === "running").length,
       mode: "live",
-      activityHead: this.activity.slice(0, 40),
-      recordingComputerId: this.recording?.computerId ?? null,
+      activityHead: activity.slice(0, 40),
+      recordingComputerId: recording?.computerId ?? null,
     };
   }
 
-  async select(id: ComputerId, actor: Actor): Promise<WorkspaceState> {
-    if (!this.host.record(id)) {
+  async select(
+    userId: string,
+    id: ComputerId,
+    actor: Actor,
+  ): Promise<WorkspaceState> {
+    if (!this.host.record(userId, id)) {
       throw new HttpError(404, { error: "unknown computer" });
     }
-    this.selected = id;
-    this.pushActivity(actor, id, "selected", id);
-    this.emit({ type: "selection", computerId: id });
-    return this.workspace();
+    await this.ws.setSelected(userId, id);
+    await this.pushActivity(userId, actor, id, "selected", id);
+    this.emit(userId, { type: "selection", computerId: id });
+    return this.workspace(userId);
   }
 
-  async spawn(spec: SpawnSpec, actor: Actor): Promise<Computer> {
-    const { record } = await this.host.spawn(spec);
+  async spawn(
+    userId: string,
+    spec: SpawnSpec,
+    actor: Actor,
+  ): Promise<Computer> {
+    const { record } = await this.host.spawn(userId, spec);
     // Seed a saved home archive if requested (user work only; excludes the
     // browser profile so it can't clobber a running Chromium). A restore that
     // was asked for but fails must NOT silently yield a blank computer — tear
@@ -303,13 +329,13 @@ export class Plane implements ControlPlane {
         if (!this.host.restoreHome) {
           throw new HttpError(400, { error: "restore not supported here" });
         }
-        const bytes = await getArchiveBytes(spec.restoreArchiveId);
+        const bytes = await getArchiveBytes(userId, spec.restoreArchiveId);
         if (!bytes) {
           throw new HttpError(404, { error: "archive not found" });
         }
         await this.host.restoreHome(record.id, bytes);
       } catch (err) {
-        await this.host.destroy(record.id).catch(() => undefined);
+        await this.host.destroy(userId, record.id).catch(() => undefined);
         if (err instanceof HttpError) throw err;
         throw new HttpError(502, {
           error: `restore failed: ${
@@ -318,33 +344,40 @@ export class Plane implements ControlPlane {
         });
       }
     }
-    this.pushActivity(actor, record.id, "spawned", record.id);
-    if (!this.selected) {
-      this.selected = record.id;
-      this.emit({ type: "selection", computerId: record.id });
+    await this.pushActivity(userId, actor, record.id, "spawned", record.id);
+    // Auto-select this user's new computer only if they have none selected —
+    // per-user convenience, not a global boot selection.
+    if (!(await this.ws.getSelected(userId))) {
+      await this.ws.setSelected(userId, record.id);
+      this.emit(userId, { type: "selection", computerId: record.id });
     }
-    this.emit({ type: "computer", computer: publicComputer(record) });
+    this.emit(userId, { type: "computer", computer: publicComputer(record) });
     return publicComputer(record);
   }
 
-  async listArchives(): Promise<HomeArchive[]> {
-    return listArchives();
+  async listArchives(userId: string): Promise<HomeArchive[]> {
+    return listArchives(userId);
   }
 
-  async deleteArchive(id: string): Promise<{ id: string }> {
-    await deleteArchive(id);
+  async deleteArchive(userId: string, id: string): Promise<{ id: string }> {
+    const deleted = await deleteArchive(userId, id);
+    if (!deleted) throw new HttpError(404, { error: "not found" });
     return { id };
   }
 
   private readonly DESTROY_PLAIN = "Destroy";
   private readonly DESTROY_SAVE = "Destroy and save files";
 
-  async destroy(id: ComputerId, actor: Actor): Promise<unknown> {
-    const rec = this.host.record(id);
+  async destroy(
+    userId: string,
+    id: ComputerId,
+    actor: Actor,
+  ): Promise<unknown> {
+    const rec = this.host.record(userId, id);
     if (!rec) {
       throw new HttpError(404, { error: "unknown computer" });
     }
-    if (this.waiter) {
+    if (this.waiters.get(userId)) {
       throw new HttpError(409, { error: "approval already pending" });
     }
     const canArchive = Boolean(this.host.archiveHome);
@@ -363,26 +396,26 @@ export class Plane implements ControlPlane {
         : undefined,
       status: "pending",
     };
-    this.lastChoice = null;
-    const decision = await this.waitForApproval(approval);
+    await this.ws.setLastChoice(userId, null);
+    const decision = await this.waitForApproval(userId, approval);
     if (decision === "rejected") {
-      this.pushActivity(actor, id, "rejected", id);
+      await this.pushActivity(userId, actor, id, "rejected", id);
       return { success: false, reason: "User rejected the operation." };
     }
     if (decision === "timeout") {
-      this.pushActivity("system", id, "timed out", id);
+      await this.pushActivity(userId, "system", id, "timed out", id);
       return { success: false, reason: "Approval timed out." };
     }
 
-    const save = this.lastChoice === this.DESTROY_SAVE;
-    this.lastChoice = null;
+    const save = (await this.ws.getLastChoice(userId)) === this.DESTROY_SAVE;
+    await this.ws.setLastChoice(userId, null);
     let archived: HomeArchive | null = null;
     if (save && this.host.archiveHome) {
       try {
-        archived = await this.createArchive(id, rec.name);
+        archived = await this.createArchive(userId, id, rec.name);
       } catch (err) {
         // Don't silently lose files: abort the destroy and report.
-        this.pushActivity("system", id, "archive failed", id);
+        await this.pushActivity(userId, "system", id, "archive failed", id);
         return {
           success: false,
           reason: `Could not save files: ${
@@ -392,18 +425,21 @@ export class Plane implements ControlPlane {
       }
     }
 
-    await this.host.destroy(id);
-    this.pushActivity(actor, id, "destroyed", id);
+    await this.host.destroy(userId, id);
+    await this.pushActivity(userId, actor, id, "destroyed", id);
     // A live recording on the destroyed computer is no longer replayable.
-    if (this.recording?.computerId === id) this.discardRecording();
-    if (this.selected === id) {
-      this.selected = this.host.list()[0]?.id ?? null;
+    const recording = await this.ws.getRecording(userId);
+    if (recording?.computerId === id) await this.discardRecording(userId);
+    if ((await this.ws.getSelected(userId)) === id) {
+      const next = this.host.list(userId).find((c) => c.id !== id)?.id ?? null;
+      await this.ws.setSelected(userId, next);
+      this.emit(userId, { type: "selection", computerId: next });
     }
-    this.emit({ type: "selection", computerId: this.selected });
     return { success: true, id, archived: archived?.id ?? null };
   }
 
   private async createArchive(
+    userId: string,
     id: ComputerId,
     name: string,
   ): Promise<HomeArchive> {
@@ -415,21 +451,22 @@ export class Plane implements ControlPlane {
       ARCHIVE_EXCLUDES,
       ARCHIVE_CAP_BYTES,
     );
-    return putArchive(crypto.randomUUID(), name, id, bytes);
+    return putArchive(userId, crypto.randomUUID(), name, id, bytes);
   }
 
-  async act(op: MachineOp, actor: Actor): Promise<unknown> {
-    if (!this.selected) {
+  async act(userId: string, op: MachineOp, actor: Actor): Promise<unknown> {
+    const selected = await this.ws.getSelected(userId);
+    if (!selected) {
       throw new HttpError(409, { error: "no computer selected" });
     }
-    const machine = this.host.machine(this.selected);
+    const machine = this.host.machine(userId, selected);
     if (!machine) {
       throw new HttpError(404, { error: "unknown computer" });
     }
-    const computerId = this.selected;
+    const computerId = selected;
 
     if (op.op === "deleteFile") {
-      if (this.waiter) {
+      if (this.waiters.get(userId)) {
         throw new HttpError(409, { error: "approval already pending" });
       }
       const approval: Approval = {
@@ -442,19 +479,19 @@ export class Plane implements ControlPlane {
         command: op.path,
         status: "pending",
       };
-      const decision = await this.waitForApproval(approval);
+      const decision = await this.waitForApproval(userId, approval);
       if (decision === "rejected") {
-        this.pushActivity(actor, computerId, "rejected", op.path);
+        await this.pushActivity(userId, actor, computerId, "rejected", op.path);
         return { success: false, reason: "User rejected the operation." };
       }
       if (decision === "timeout") {
-        this.pushActivity("system", computerId, "timed out", op.path);
+        await this.pushActivity(userId, "system", computerId, "timed out", op.path);
         return { success: false, reason: "Approval timed out." };
       }
     }
 
     if (op.op === "killProcess") {
-      if (this.waiter) {
+      if (this.waiters.get(userId)) {
         throw new HttpError(409, { error: "approval already pending" });
       }
       const approval: Approval = {
@@ -467,9 +504,10 @@ export class Plane implements ControlPlane {
         command: `kill ${op.pid}`,
         status: "pending",
       };
-      const decision = await this.waitForApproval(approval);
+      const decision = await this.waitForApproval(userId, approval);
       if (decision !== "approved") {
-        this.pushActivity(
+        await this.pushActivity(
+          userId,
           decision === "timeout" ? "system" : actor,
           computerId,
           decision === "timeout" ? "timed out" : "rejected",
@@ -480,7 +518,7 @@ export class Plane implements ControlPlane {
     }
 
     if (op.op === "installPackage") {
-      if (this.waiter) {
+      if (this.waiters.get(userId)) {
         throw new HttpError(409, { error: "approval already pending" });
       }
       const approval: Approval = {
@@ -493,9 +531,10 @@ export class Plane implements ControlPlane {
         command: `apt-get install -y ${op.name}`,
         status: "pending",
       };
-      const decision = await this.waitForApproval(approval);
+      const decision = await this.waitForApproval(userId, approval);
       if (decision !== "approved") {
-        this.pushActivity(
+        await this.pushActivity(
+          userId,
           decision === "timeout" ? "system" : actor,
           computerId,
           decision === "timeout" ? "timed out" : "rejected",
@@ -506,7 +545,7 @@ export class Plane implements ControlPlane {
     }
 
     if (op.op === "run" && requiresApproval(op.command)) {
-      if (this.waiter) {
+      if (this.waiters.get(userId)) {
         throw new HttpError(409, { error: "approval already pending" });
       }
       const approval: Approval = {
@@ -519,9 +558,9 @@ export class Plane implements ControlPlane {
         command: op.command,
         status: "pending",
       };
-      const decision = await this.waitForApproval(approval);
+      const decision = await this.waitForApproval(userId, approval);
       if (decision === "rejected") {
-        this.pushActivity(actor, computerId, "rejected", op.command);
+        await this.pushActivity(userId, actor, computerId, "rejected", op.command);
         return {
           exitCode: 1,
           stdout: "",
@@ -530,7 +569,7 @@ export class Plane implements ControlPlane {
         };
       }
       if (decision === "timeout") {
-        this.pushActivity("system", computerId, "timed out", op.command);
+        await this.pushActivity(userId, "system", computerId, "timed out", op.command);
         return {
           exitCode: 1,
           stdout: "",
@@ -548,9 +587,9 @@ export class Plane implements ControlPlane {
     // takes one approval listing the gated ops + typed text. The bridge runs
     // the steps without re-prompting once approved.
     if (op.op === "replayAction" && actor !== "human") {
-      const gated = this.gatedSteps(op.steps);
+      const gated = this.gatedSteps(op.steps, true);
       if (gated.length > 0) {
-        if (this.waiter) {
+        if (this.waiters.get(userId)) {
           throw new HttpError(409, { error: "approval already pending" });
         }
         const approval: Approval = {
@@ -564,9 +603,10 @@ export class Plane implements ControlPlane {
             gated.map((g) => `• ${g}`).join("\n"),
           status: "pending",
         };
-        const decision = await this.waitForApproval(approval);
+        const decision = await this.waitForApproval(userId, approval);
         if (decision !== "approved") {
-          this.pushActivity(
+          await this.pushActivity(
+            userId,
             decision === "timeout" ? "system" : actor,
             computerId,
             decision === "timeout" ? "timed out" : "rejected",
@@ -591,7 +631,7 @@ export class Plane implements ControlPlane {
       if (buf) {
         before = true;
         enqueueTape(async () => {
-          await putShot(computerId, eventId, "before", buf);
+          await putShot(userId, computerId, eventId, "before", buf);
         });
       }
     }
@@ -616,9 +656,9 @@ export class Plane implements ControlPlane {
           durationMs: Date.now() - t0,
         };
         // Emit optimistically; persist off the request path.
-        this.emit({ type: "tape", event: ev });
+        this.emit(userId, { type: "tape", event: ev });
         enqueueTape(async () => {
-          await appendEvent(ev);
+          await appendEvent(userId, ev);
         });
       }
       if (err instanceof HttpError) throw err;
@@ -632,7 +672,7 @@ export class Plane implements ControlPlane {
         if (buf) {
           after = true;
           enqueueTape(async () => {
-            await putShot(computerId, eventId, "after", buf);
+            await putShot(userId, computerId, eventId, "after", buf);
           });
         }
       }
@@ -652,97 +692,109 @@ export class Plane implements ControlPlane {
       };
       // The desktop already mutated: emit + persist without ever throwing back
       // to the caller (which would make the agent retry a non-idempotent op).
-      this.emit({ type: "tape", event: ev });
+      this.emit(userId, { type: "tape", event: ev });
       enqueueTape(async () => {
-        await appendEvent(ev);
+        await appendEvent(userId, ev);
       });
     }
 
     const mut = mutation(op);
-    if (mut) this.pushActivity(actor, computerId, mut.verb, mut.detail);
+    if (mut) await this.pushActivity(userId, actor, computerId, mut.verb, mut.detail);
 
     // If a recording is live on this computer, capture the agent op into it
     // (skip replay itself; reads/snapshot never reach here as mutations).
+    const recording = await this.ws.getRecording(userId);
     if (
       mut &&
       op.op !== "replayAction" &&
-      this.recording &&
-      this.recording.computerId === computerId
+      recording &&
+      recording.computerId === computerId
     ) {
-      this.appendRecordingStep({
+      const count = await this.ws.appendStep(userId, {
         kind: "op",
         op,
         label: mut.detail,
-        t: Date.now() - this.recording.t0,
+        t: Date.now() - recording.t0,
       });
+      if (count >= RECORD_MAX_STEPS) await this.discardRecording(userId);
     }
     return result;
   }
 
   async resolveApproval(
+    userId: string,
     id: string,
     decision: "approved" | "rejected",
   ): Promise<Approval> {
-    if (!this.waiter || this.waiter.approval.id !== id) {
+    const waiter = this.waiters.get(userId);
+    if (!waiter || waiter.approval.id !== id) {
       throw new HttpError(404, { error: "unknown approval" });
     }
-    const approval: Approval = { ...this.waiter.approval, status: decision };
-    this.waiter.approval = approval;
-    this.emit({ type: "approval", approval });
-    clearTimeout(this.waiter.timer);
-    this.waiter.settle(decision);
+    const approval: Approval = { ...waiter.approval, status: decision };
+    waiter.approval = approval;
+    this.emit(userId, { type: "approval", approval });
+    clearTimeout(waiter.timer);
+    waiter.settle(decision);
     return approval;
   }
 
-  async resolveChoice(id: string, choice: string): Promise<Approval> {
-    if (!this.waiter || this.waiter.approval.id !== id) {
+  async resolveChoice(
+    userId: string,
+    id: string,
+    choice: string,
+  ): Promise<Approval> {
+    const waiter = this.waiters.get(userId);
+    if (!waiter || waiter.approval.id !== id) {
       throw new HttpError(404, { error: "unknown approval" });
     }
-    const opts = this.waiter.approval.options ?? [];
+    const opts = waiter.approval.options ?? [];
     if (!opts.includes(choice)) {
       throw new HttpError(400, { error: "unknown option" });
     }
-    this.lastChoice = choice;
+    await this.ws.setLastChoice(userId, choice);
     const approval: Approval = {
-      ...this.waiter.approval,
+      ...waiter.approval,
       status: "approved",
       choice,
     };
-    this.waiter.approval = approval;
-    this.emit({ type: "approval", approval });
-    clearTimeout(this.waiter.timer);
-    this.waiter.settle("approved");
+    waiter.approval = approval;
+    this.emit(userId, { type: "approval", approval });
+    clearTimeout(waiter.timer);
+    waiter.settle("approved");
     return approval;
   }
 
   async rename(
+    userId: string,
     id: ComputerId,
     name: string,
     actor: Actor,
   ): Promise<Computer> {
-    const rec = this.host.record(id);
+    const rec = this.host.record(userId, id);
     if (!rec) throw new HttpError(404, { error: "unknown computer" });
     const n = name.trim();
     if (!n) throw new HttpError(400, { error: "invalid name" });
     rec.name = n;
-    this.pushActivity(actor, id, "renamed", n);
-    this.emit({ type: "computer", computer: publicComputer(rec) });
+    await this.pushActivity(userId, actor, id, "renamed", n);
+    this.emit(userId, { type: "computer", computer: publicComputer(rec) });
     return publicComputer(rec);
   }
 
   async requestChoice(
+    userId: string,
     question: string,
     options: string[],
     actor: Actor,
   ): Promise<{ choice: string } | { rejected: true }> {
-    if (this.waiter) {
+    if (this.waiters.get(userId)) {
       throw new HttpError(409, { error: "approval already pending" });
     }
     const opts = options.map((o) => o.trim()).filter(Boolean);
     if (!question.trim() || opts.length < 2) {
       throw new HttpError(400, { error: "question and 2+ options required" });
     }
-    const computerId = this.selected ?? this.host.list()[0]?.id;
+    const computerId =
+      (await this.ws.getSelected(userId)) ?? this.host.list(userId)[0]?.id;
     if (!computerId) throw new HttpError(409, { error: "no computer selected" });
     const approval: Approval = {
       id: crypto.randomUUID(),
@@ -754,35 +806,46 @@ export class Plane implements ControlPlane {
       options: opts,
       status: "pending",
     };
-    this.lastChoice = null;
-    const decision = await this.waitForApproval(approval);
-    const choice = this.lastChoice;
-    this.lastChoice = null;
+    await this.ws.setLastChoice(userId, null);
+    const decision = await this.waitForApproval(userId, approval);
+    const choice = await this.ws.getLastChoice(userId);
+    await this.ws.setLastChoice(userId, null);
     if (decision !== "approved" || !choice) {
-      this.pushActivity(actor, computerId, "rejected", question.trim());
+      await this.pushActivity(userId, actor, computerId, "rejected", question.trim());
       return { rejected: true };
     }
-    this.pushActivity(actor, computerId, "chose", choice);
+    await this.pushActivity(userId, actor, computerId, "chose", choice);
     return { choice };
   }
 
   // --- Recipes (Teach & Replay) ---
 
-  async listActions(): Promise<RecordedAction[]> {
-    return listActions();
+  async listActions(userId: string): Promise<RecordedAction[]> {
+    return listActions(userId);
   }
 
-  async getRecordedAction(id: string): Promise<RecordedAction | null> {
-    return getAction(id);
+  async getRecordedAction(
+    userId: string,
+    id: string,
+  ): Promise<RecordedAction | null> {
+    return getAction(userId, id);
   }
 
-  async deleteRecordedAction(id: string): Promise<{ id: string }> {
-    await deleteAction(id);
+  async deleteRecordedAction(
+    userId: string,
+    id: string,
+  ): Promise<{ id: string }> {
+    const deleted = await deleteAction(userId, id);
+    if (!deleted) throw new HttpError(404, { error: "not found" });
     return { id };
   }
 
-  // Human-readable list of steps that would require approval to run.
-  private gatedSteps(steps: RecipeStep[]): string[] {
+  // Human-readable list of steps that would require approval to run. Privileged
+  // MachineOps are ALWAYS listed (a stored `run: rm` is a stored exploit even
+  // when a human saves it); raw input steps (type/key/click…) are listed only
+  // when includeInput is set — i.e. for an agent replay, where a recorded
+  // `type: rm -rf ~` must be surfaced. Human save/replay of input runs free.
+  private gatedSteps(steps: RecipeStep[], includeInput: boolean): string[] {
     const gated: string[] = [];
     for (const s of steps) {
       if (s.kind === "op") {
@@ -796,14 +859,15 @@ export class Plane implements ControlPlane {
         } else if (op.op === "installPackage") {
           gated.push(`install: ${op.name}`);
         }
-      } else if (s.kind === "type") {
-        // Recorded keystrokes can't be scanned for danger — surface the text
-        // so the human sees e.g. "rm -rf ~" before approving an agent replay.
+      } else if (includeInput && s.kind === "type") {
         const text = s.text.length > 60 ? `${s.text.slice(0, 60)}…` : s.text;
         gated.push(`type: ${text}`);
-      } else if (s.kind === "key") {
+      } else if (includeInput && s.kind === "key") {
         gated.push(`key: ${s.keys}`);
-      } else if (s.kind === "click" || s.kind === "drag" || s.kind === "scroll") {
+      } else if (
+        includeInput &&
+        (s.kind === "click" || s.kind === "drag" || s.kind === "scroll")
+      ) {
         gated.push(`input: ${s.kind}`);
       }
     }
@@ -811,12 +875,13 @@ export class Plane implements ControlPlane {
   }
 
   private async approveRecipe(
+    userId: string,
     computerId: ComputerId,
     title: string,
     gated: string[],
   ): Promise<"approved" | "rejected" | "timeout"> {
     if (gated.length === 0) return "approved";
-    if (this.waiter) {
+    if (this.waiters.get(userId)) {
       throw new HttpError(409, { error: "approval already pending" });
     }
     const approval: Approval = {
@@ -830,21 +895,22 @@ export class Plane implements ControlPlane {
         gated.map((g) => `• ${g}`).join("\n"),
       status: "pending",
     };
-    return this.waitForApproval(approval);
+    return this.waitForApproval(userId, approval);
   }
 
   // Promote the last N mutating tape events for the selected computer into a
   // saved recipe. The human is present (they clicked "Save as action").
   async promoteRecent(
+    userId: string,
     n: number,
     name: string,
     description: string,
   ): Promise<RecordedAction> {
-    if (!this.selected) {
+    const computerId = await this.ws.getSelected(userId);
+    if (!computerId) {
       throw new HttpError(409, { error: "no computer selected" });
     }
-    const computerId = this.selected;
-    const all = await listTape();
+    const all = await listTape(userId);
     const recent = all
       .filter(
         (e) => e.computerId === computerId && mutation(e.input as MachineOp),
@@ -870,26 +936,28 @@ export class Plane implements ControlPlane {
       computerId,
       createdAt: new Date().toISOString(),
     };
-    await saveAction(action);
+    await saveAction(userId, action);
     return action;
   }
 
-  // Save an authored recipe. If it contains gated ops, require the same
-  // approval as replay — a stored `run: rm` is a stored exploit.
+  // Save an authored recipe. Privileged ops are gated for ALL actors (a stored
+  // `run: rm` is a stored exploit); raw input steps are not gated on save.
   async saveRecordedAction(
+    userId: string,
     input: { name: string; description?: string; steps: RecipeStep[] },
     actor: Actor,
   ): Promise<RecordedAction | { rejected: true; reason: string }> {
+    void actor;
     const steps = Array.isArray(input.steps) ? input.steps : [];
     if (steps.length === 0) {
       throw new HttpError(400, { error: "steps required" });
     }
-    const computerId = this.selected ?? this.host.list()[0]?.id;
-    // Agent-authored recipes with a gated step are a stored exploit → one
-    // approval. A human authoring runs free (same split as replay).
-    const gated = actor === "human" ? [] : this.gatedSteps(steps);
+    const computerId =
+      (await this.ws.getSelected(userId)) ?? this.host.list(userId)[0]?.id;
+    const gated = this.gatedSteps(steps, false);
     if (gated.length > 0 && computerId) {
       const decision = await this.approveRecipe(
+        userId,
         computerId,
         `Save recipe "${input.name}"?`,
         gated,
@@ -907,25 +975,26 @@ export class Plane implements ControlPlane {
       computerId: computerId ?? undefined,
       createdAt: new Date().toISOString(),
     };
-    await saveAction(action);
+    await saveAction(userId, action);
     return action;
   }
 
   // Replay a saved recipe on the selected computer: one approval for all gated
   // steps, then one replayAction op (one tape event, executed in-guest).
   async replayRecordedAction(
+    userId: string,
     idOrName: { actionId?: string; name?: string },
     speed: number,
     actor: Actor,
   ): Promise<unknown> {
-    if (!this.selected) {
+    if (!(await this.ws.getSelected(userId))) {
       throw new HttpError(409, { error: "no computer selected" });
     }
     let action: RecordedAction | null = null;
     if (idOrName.actionId) {
-      action = await getAction(idOrName.actionId);
+      action = await getAction(userId, idOrName.actionId);
     } else if (idOrName.name) {
-      const all = await listActions();
+      const all = await listActions(userId);
       action = all.find((a) => a.name === idOrName.name) ?? null;
     }
     if (!action) throw new HttpError(404, { error: "recipe not found" });
@@ -933,6 +1002,7 @@ export class Plane implements ControlPlane {
     // Gating happens inside act() (so the raw /api/act path is covered too):
     // one approval for the whole recipe, one tape event, executed in-guest.
     return this.act(
+      userId,
       { op: "replayAction", steps: action.steps, speed },
       actor,
     );
@@ -940,80 +1010,81 @@ export class Plane implements ControlPlane {
 
   // --- Live recording (viewer human input + agent ops, one server clock) ---
 
-  private static readonly RECORD_MAX_MS = 10 * 60_000;
-  private static readonly RECORD_MAX_STEPS = 2000;
-
-  recordStart(
+  async recordStart(
+    userId: string,
     actor: Actor = "human",
-  ): { computerId: ComputerId; startedAt: number } {
+  ): Promise<{ computerId: ComputerId; startedAt: number }> {
     if (actor !== "human") {
       throw new HttpError(403, { error: "recording is human-only" });
     }
-    if (this.recording) {
+    if (await this.ws.getRecording(userId)) {
       throw new HttpError(409, { error: "already recording" });
     }
-    if (!this.selected) {
+    const selected = await this.ws.getSelected(userId);
+    if (!selected) {
       throw new HttpError(409, { error: "no computer selected" });
     }
-    const rec = this.host.record(this.selected);
+    const rec = this.host.record(userId, selected);
     if (!rec || rec.status !== "running") {
       throw new HttpError(409, { error: "selected computer is not running" });
     }
     const t0 = Date.now();
+    await this.ws.startRecording(userId, selected, t0);
     const timer = setTimeout(
-      () => this.discardRecording(),
-      Plane.RECORD_MAX_MS,
+      () => void this.discardRecording(userId),
+      RECORD_MAX_MS,
     );
     timer.unref?.();
-    this.recording = { computerId: this.selected, t0, steps: [], timer };
-    this.emit({ type: "recording", computerId: this.selected });
-    return { computerId: this.selected, startedAt: t0 };
+    this.recTimers.set(userId, timer);
+    this.emit(userId, { type: "recording", computerId: selected });
+    return { computerId: selected, startedAt: t0 };
   }
 
   // Append a viewer-normalized input step. The API stamps `t` on accept so a
   // single clock orders human and agent steps; any client `t`/computerId is
-  // ignored. There is exactly one active session.
-  recordEvent(raw: unknown, actor: Actor = "human"): { stepCount: number } {
+  // ignored. There is exactly one active session per user.
+  async recordEvent(
+    userId: string,
+    raw: unknown,
+    actor: Actor = "human",
+  ): Promise<{ stepCount: number }> {
     if (actor !== "human") {
       throw new HttpError(403, { error: "recording is human-only" });
     }
-    if (!this.recording) {
+    const rec = await this.ws.getRecording(userId);
+    if (!rec) {
       throw new HttpError(409, { error: "not recording" });
     }
     const step = sanitizeRecordStep(raw);
     if (!step) {
       throw new HttpError(400, { error: "invalid record step" });
     }
-    this.appendRecordingStep({
+    const count = await this.ws.appendStep(userId, {
       ...step,
-      t: Date.now() - this.recording.t0,
+      t: Date.now() - rec.t0,
     });
-    return { stepCount: this.recording?.steps.length ?? 0 };
+    if (count >= RECORD_MAX_STEPS) await this.discardRecording(userId);
+    return { stepCount: count };
   }
 
-  private appendRecordingStep(step: RecipeStep): void {
-    if (!this.recording) return;
-    this.recording.steps.push(step);
-    if (this.recording.steps.length >= Plane.RECORD_MAX_STEPS) {
-      this.discardRecording();
-    }
-  }
-
-  recordStatus(): {
+  async recordStatus(userId: string): Promise<{
     recording: boolean;
     computerId: ComputerId | null;
     startedAt: number | null;
     stepCount: number;
-  } {
+  }> {
+    const rec = await this.ws.getRecording(userId);
+    const steps = rec ? await this.ws.getSteps(userId) : [];
     return {
-      recording: !!this.recording,
-      computerId: this.recording?.computerId ?? null,
-      startedAt: this.recording?.t0 ?? null,
-      stepCount: this.recording?.steps.length ?? 0,
+      recording: !!rec,
+      computerId: rec?.computerId ?? null,
+      startedAt: rec?.t0 ?? null,
+      stepCount: steps.length,
     };
   }
 
   async recordStop(
+    userId: string,
     name: string,
     description: string,
     actor: Actor = "human",
@@ -1021,13 +1092,15 @@ export class Plane implements ControlPlane {
     if (actor !== "human") {
       throw new HttpError(403, { error: "recording is human-only" });
     }
-    if (!this.recording) {
+    const rec = await this.ws.getRecording(userId);
+    if (!rec) {
       throw new HttpError(409, { error: "not recording" });
     }
-    const { computerId, steps, timer } = this.recording;
-    clearTimeout(timer);
-    this.recording = null;
-    this.emit({ type: "recording", computerId: null });
+    const steps = await this.ws.getSteps(userId);
+    const { computerId } = rec;
+    this.clearRecTimer(userId);
+    await this.ws.clearRecording(userId);
+    this.emit(userId, { type: "recording", computerId: null });
     if (steps.length === 0) {
       throw new HttpError(400, { error: "nothing was recorded" });
     }
@@ -1040,53 +1113,74 @@ export class Plane implements ControlPlane {
       computerId,
       createdAt: new Date().toISOString(),
     };
-    await saveAction(action);
+    await saveAction(userId, action);
     return action;
   }
 
+  private clearRecTimer(userId: string): void {
+    const t = this.recTimers.get(userId);
+    if (t) {
+      clearTimeout(t);
+      this.recTimers.delete(userId);
+    }
+  }
+
   // Drop an in-progress recording (cap hit, computer destroyed, shutdown).
-  discardRecording(): void {
-    if (!this.recording) return;
-    clearTimeout(this.recording.timer);
-    this.recording = null;
-    this.emit({ type: "recording", computerId: null });
+  async discardRecording(userId: string): Promise<void> {
+    this.clearRecTimer(userId);
+    if (!(await this.ws.getRecording(userId))) return;
+    await this.ws.clearRecording(userId);
+    this.emit(userId, { type: "recording", computerId: null });
+  }
+
+  // Discard every in-progress recording (API shutdown).
+  discardAllRecordings(): void {
+    for (const userId of [...this.recTimers.keys()]) {
+      void this.discardRecording(userId);
+    }
   }
 
   private waitForApproval(
+    userId: string,
     approval: Approval,
   ): Promise<"approved" | "rejected" | "timeout"> {
-    this.emit({ type: "approval", approval });
+    void this.ws.setApproval(userId, approval);
+    this.emit(userId, { type: "approval", approval });
     void this.host
-      .machine(approval.computerId)
+      .machine(userId, approval.computerId)
       ?.notify(approval.title, approval.body)
       .catch(() => undefined);
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
-        if (this.waiter?.approval.id === approval.id) {
+        const w = this.waiters.get(userId);
+        if (w?.approval.id === approval.id) {
           const timed: Approval = { ...approval, status: "rejected" };
-          this.waiter.approval = timed;
-          this.emit({ type: "approval", approval: timed });
-          this.waiter.settle("timeout");
+          w.approval = timed;
+          void this.ws.setApproval(userId, null);
+          this.emit(userId, { type: "approval", approval: timed });
+          w.settle("timeout");
         }
       }, APPROVAL_MS);
-      this.waiter = {
+      this.waiters.set(userId, {
         approval,
         timer,
         settle: (decision) => {
           clearTimeout(timer);
-          this.waiter = null;
+          this.waiters.delete(userId);
+          void this.ws.setApproval(userId, null);
           resolve(decision);
         },
-      };
+      });
     });
   }
 
-  private pushActivity(
+  private async pushActivity(
+    userId: string,
     actor: Actor,
     computerId: ComputerId | null,
     verb: string,
     detail: string,
-  ): void {
+  ): Promise<void> {
     const event: ActivityEvent = {
       id: crypto.randomUUID(),
       at: new Date().toISOString(),
@@ -1095,12 +1189,12 @@ export class Plane implements ControlPlane {
       verb,
       detail,
     };
-    this.activity = [event, ...this.activity].slice(0, ACTIVITY_CAP);
-    this.emit({ type: "activity", event });
+    await this.ws.pushActivity(userId, event);
+    this.emit(userId, { type: "activity", event });
   }
 
-  private emit(event: WsEvent): void {
-    for (const listener of this.listeners) listener(event);
+  private emit(userId: string, event: WsEvent): void {
+    for (const listener of this.listeners) listener(userId, event);
   }
 }
 

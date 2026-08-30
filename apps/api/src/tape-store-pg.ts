@@ -24,8 +24,14 @@ type Row = {
   has_after: boolean;
 };
 
-function shotKey(computerId: string, eventId: string, side: "before" | "after") {
-  return `${computerId}/${eventId}-${side}.png`;
+// S3 keys are namespaced by owner so tenants cannot collide or read each other.
+function shotKey(
+  userId: string,
+  computerId: string,
+  eventId: string,
+  side: "before" | "after",
+) {
+  return `users/${userId}/tape/${computerId}/${eventId}-${side}.png`;
 }
 
 function rowToEvent(r: Row): TapeEvent {
@@ -45,21 +51,24 @@ function rowToEvent(r: Row): TapeEvent {
   };
 }
 
-export async function listTape(): Promise<TapeEvent[]> {
+export async function listTape(userId: string): Promise<TapeEvent[]> {
   const { rows } = await pool.query<Row>(
-    "select * from tape_events order by at desc limit $1",
-    [CAP],
+    "select * from tape_events where user_id = $1 order by at desc limit $2",
+    [userId, CAP],
   );
   return rows.map(rowToEvent);
 }
 
 export async function getShot(
+  userId: string,
   eventId: string,
   side: "before" | "after",
 ): Promise<Buffer | null> {
+  // Ownership is enforced in SQL: a wrong-owner event id returns no row → null,
+  // never another tenant's screenshot.
   const { rows } = await pool.query<{ computer_id: string }>(
-    "select computer_id from tape_events where id = $1",
-    [eventId],
+    "select computer_id from tape_events where id = $1 and user_id = $2",
+    [eventId, userId],
   );
   const computerId = rows[0]?.computer_id;
   if (!computerId) return null;
@@ -67,7 +76,7 @@ export async function getShot(
     const out = await s3.send(
       new GetObjectCommand({
         Bucket: BUCKET,
-        Key: shotKey(computerId, eventId, side),
+        Key: shotKey(userId, computerId, eventId, side),
       }),
     );
     const bytes = await out.Body!.transformToByteArray();
@@ -78,6 +87,7 @@ export async function getShot(
 }
 
 export async function putShot(
+  userId: string,
   computerId: string,
   eventId: string,
   side: "before" | "after",
@@ -86,23 +96,27 @@ export async function putShot(
   await s3.send(
     new PutObjectCommand({
       Bucket: BUCKET,
-      Key: shotKey(computerId, eventId, side),
+      Key: shotKey(userId, computerId, eventId, side),
       Body: bytes,
       ContentType: "image/png",
     }),
   );
 }
 
-export async function appendEvent(ev: TapeEvent): Promise<void> {
+export async function appendEvent(
+  userId: string,
+  ev: TapeEvent,
+): Promise<void> {
   // Insert only — retention runs on a background interval (startRetention), not
   // on this hot path, so a slow MinIO can't back up the tape write queue.
   await pool.query(
     `insert into tape_events
-       (id, at, actor, computer_id, op, detail, input, output, error, log, has_before, has_after)
-     values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12)
+       (id, user_id, at, actor, computer_id, op, detail, input, output, error, log, has_before, has_after)
+     values ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13)
      on conflict (id) do nothing`,
     [
       ev.id,
+      userId,
       ev.at,
       ev.actor,
       ev.computerId,
@@ -118,13 +132,23 @@ export async function appendEvent(ev: TapeEvent): Promise<void> {
   );
 }
 
-// Delete events past the cap and their screenshots in one pass. Safe to call on
-// an interval; a single statement returns the keys to purge from object storage.
+// Delete events past the cap PER USER (not a global OFFSET) and their
+// screenshots in one pass. Safe to call on an interval.
 export async function pruneTape(): Promise<void> {
-  const { rows: stale } = await pool.query<{ id: string; computer_id: string }>(
+  const { rows: stale } = await pool.query<{
+    id: string;
+    user_id: string;
+    computer_id: string;
+  }>(
     `delete from tape_events
-      where id in (select id from tape_events order by at desc offset $1)
-      returning id, computer_id`,
+      where id in (
+        select id from (
+          select id,
+                 row_number() over (partition by user_id order by at desc) as rn
+            from tape_events
+        ) t where rn > $1
+      )
+      returning id, user_id, computer_id`,
     [CAP],
   );
   if (stale.length === 0) return;
@@ -135,7 +159,7 @@ export async function pruneTape(): Promise<void> {
           .send(
             new DeleteObjectCommand({
               Bucket: BUCKET,
-              Key: shotKey(s.computer_id, s.id, side),
+              Key: shotKey(s.user_id, s.computer_id, s.id, side),
             }),
           )
           .catch(() => undefined),
