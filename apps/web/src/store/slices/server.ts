@@ -39,6 +39,7 @@ export type ServerSlice = {
   removeComputer: (id: ComputerId) => void;
   prependActivity: (event: ActivityEvent) => void;
   prependTape: (event: TapeEvent) => void;
+  hydrateTape: (events: TapeEvent[]) => void;
   setPendingApproval: (approval: Approval | null) => void;
   setSelectedComputer: (id: ComputerId | null) => void;
   setApiOnline: (online: boolean) => void;
@@ -114,7 +115,19 @@ export function createServerSlice(set: StoreSet, get: StoreGet): ServerSlice {
           tape[existing] = event;
           return { tape };
         }
-        return { tape: [event, ...s.tape].slice(0, 100) };
+        return { tape: [event, ...s.tape].slice(0, 200) };
+      }),
+
+    hydrateTape: (events) =>
+      set((s) => {
+        const byId = new Map<string, TapeEvent>();
+        for (const e of events) byId.set(e.id, e);
+        for (const e of s.tape) byId.set(e.id, e);
+        return {
+          tape: [...byId.values()]
+            .sort((a, b) => (a.at < b.at ? 1 : -1))
+            .slice(0, 200),
+        };
       }),
 
     upsertComputer: (computer) => {
@@ -164,7 +177,6 @@ export function createServerSlice(set: StoreSet, get: StoreGet): ServerSlice {
     selectComputer: async (id) => {
       const w = await api<WorkspaceState>("/api/workspace/select", {
         method: "POST",
-        headers: { "x-actor": "human" },
         body: JSON.stringify({ computerId: id }),
       });
       get().applyWorkspace(w);
@@ -173,7 +185,6 @@ export function createServerSlice(set: StoreSet, get: StoreGet): ServerSlice {
     spawnComputer: async (restoreArchiveId) => {
       await api("/api/computers", {
         method: "POST",
-        headers: { "x-actor": "human" },
         body: JSON.stringify(restoreArchiveId ? { restoreArchiveId } : {}),
       });
       await fetchSnapshot(get);
@@ -182,7 +193,6 @@ export function createServerSlice(set: StoreSet, get: StoreGet): ServerSlice {
     destroyComputer: async (id) => {
       const req = api(`/api/computers/${encodeURIComponent(id)}`, {
         method: "DELETE",
-        headers: { "x-actor": "human" },
       }).then(
         () => fetchSnapshot(get),
         () => fetchSnapshot(get),

@@ -20,7 +20,12 @@ function readSound(): boolean {
   return soundEnabled();
 }
 
+export type Session = { email: string };
+
 export type UiSlice = {
+  // In-memory only (never persisted): the authenticated session, if any.
+  session: Session | null;
+  setSession: (session: Session | null) => void;
   idle: boolean;
   timelineOpen: boolean;
   inspectorTab: InspectorTab;
@@ -29,6 +34,8 @@ export type UiSlice = {
   recipeFocusId: string | null;
   toastsVisible: boolean;
   sound: boolean;
+  streamFps: Record<string, number>;
+  setStreamFps: (id: string, fps: number | null) => void;
   setIdle: (idle: boolean) => void;
   openInspector: (
     tab: InspectorTab,
@@ -43,6 +50,8 @@ export type UiSlice = {
 
 export function createUiSlice(set: StoreSet, get: StoreGet): UiSlice {
   return {
+    session: null,
+    setSession: (session) => set({ session }),
     idle: false,
     timelineOpen: false,
     inspectorTab: "tape",
@@ -51,6 +60,19 @@ export function createUiSlice(set: StoreSet, get: StoreGet): UiSlice {
     recipeFocusId: null,
     toastsVisible: false,
     sound: readSound(),
+    streamFps: {},
+    setStreamFps: (id, fps) => {
+      const cur = get().streamFps[id];
+      if (fps == null) {
+        if (cur == null) return;
+        const next = { ...get().streamFps };
+        delete next[id];
+        set({ streamFps: next });
+        return;
+      }
+      if (cur === fps) return;
+      set({ streamFps: { ...get().streamFps, [id]: fps } });
+    },
     setIdle: (idle) => set({ idle }),
     openInspector: (tab, opts) => {
       const s = get();

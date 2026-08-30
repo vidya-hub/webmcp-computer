@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Volume2, VolumeX } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
+import { logout } from "../auth/session.ts";
 import { store, useStore } from "../store/index.ts";
 import { selectMenuBar } from "../store/selectors.ts";
 
@@ -22,6 +23,7 @@ export function MenuBar() {
     recordingComputerId,
     toastsVisible,
   } = useStore(useShallow(selectMenuBar));
+  const session = useStore((s) => s.session);
   const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
@@ -94,6 +96,16 @@ export function MenuBar() {
         >
           {sound ? <Volume2 size={14} /> : <VolumeX size={14} />}
         </button>
+        {session ? (
+          <button
+            type="button"
+            className="menubar-item"
+            title={`Sign out ${session.email}`}
+            onClick={() => void logout()}
+          >
+            Sign out
+          </button>
+        ) : null}
         <span className="menubar-clock">{clockTime(now)}</span>
       </span>
     </header>

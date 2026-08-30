@@ -7,6 +7,7 @@ export function selectDock(s: AppStore) {
     actingComputerId: s.actingComputerId,
     minimized: s.minimized,
     computersRunning: s.computersRunning,
+    streamFps: s.streamFps,
   };
 }
 
@@ -51,5 +52,6 @@ export function windowSlice(id: string) {
     lifecycle: s.lifecycle[id] ?? null,
     minimized: s.minimized.includes(id),
     recording: s.recordingComputerId === id,
+    fps: s.streamFps[id],
   });
 }

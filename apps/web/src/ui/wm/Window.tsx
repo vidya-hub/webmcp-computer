@@ -19,6 +19,7 @@ import { ComputerBoot } from "./ComputerBoot.tsx";
 import { flipFrom, flyTo } from "./motion.ts";
 import { startRecording, stopRecording } from "./recording.ts";
 import { RecordStopDialog } from "./RecordStopDialog.tsx";
+import { fpsTone } from "./streamFps.ts";
 
 type Kind = "move" | "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
@@ -90,15 +91,11 @@ export function WindowFrame({ computer, index, canvasRef, onMove }: Props) {
 
   const overview = Boolean(target);
   const wantAttach =
-    (computer.status === "starting" || computer.status === "running") &&
+    computer.status === "running" &&
     wm.lifecycle !== "minimizing" &&
     wm.lifecycle !== "closing" &&
     !wm.minimized &&
-    (computer.status === "starting" ||
-      wm.recording ||
-      overview ||
-      wm.selected ||
-      wm.acting);
+    (wm.recording || overview || wm.selected || wm.acting);
   const [attached, setAttached] = useState(wantAttach);
   useEffect(() => {
     if (wantAttach) {
@@ -333,7 +330,7 @@ export function WindowFrame({ computer, index, canvasRef, onMove }: Props) {
                 }}
               >
                 <span className="wm-rec-dot" />
-                {wm.recording ? "REC" : ""}
+                {wm.recording ? "REC" : "Rec"}
               </button>
             ) : null}
             <button
@@ -364,13 +361,19 @@ export function WindowFrame({ computer, index, canvasRef, onMove }: Props) {
           <RecordStopDialog
             onCancel={() => setShowStop(false)}
             onSave={async (name, description) => {
-              setShowStop(false);
               await stopRecording(name, description);
+              setShowStop(false);
+              store.getState().openInspector("recipes");
             }}
           />
         ) : null}
         <div className="wm-body" ref={bodyRef}>
           <ComputerBoot computer={computer} />
+          {typeof wm.fps === "number" ? (
+            <span className={`wm-fps-hud ${fpsTone(wm.fps)}`} aria-hidden>
+              {wm.fps} fps
+            </span>
+          ) : null}
           {(!wm.selected && !wm.dragActive) || target ? (
             <button
               type="button"

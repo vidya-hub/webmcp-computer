@@ -5,8 +5,9 @@ import { store, useStore } from "../../store/index.ts";
 import { play } from "../sound.ts";
 import { setReplayLock } from "../wm/recording.ts";
 
-export function RecipesPanel() {
+export function RecipesPanel({ active = true }: { active?: boolean }) {
   const focusId = useStore((s) => s.recipeFocusId);
+  const selectedComputer = useStore((s) => s.selectedComputer);
   const [actions, setActions] = useState<RecordedAction[] | null>(null);
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -26,14 +27,15 @@ export function RecipesPanel() {
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (active) load();
+  }, [active, load]);
 
   useEffect(() => {
     if (focusId) setSelected(focusId);
   }, [focusId]);
 
   useEffect(() => {
+    if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
@@ -42,20 +44,25 @@ export function RecipesPanel() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
+  }, [active]);
 
   async function replay(a: RecordedAction) {
     setBusy(a.id);
     setMsg(null);
     const target = store.getState().selectedComputer;
+    if (!target) {
+      setBusy(null);
+      setMsg("Select a computer to replay on");
+      return;
+    }
+    store.getState().restore(target);
     store.getState().beginAct("replaying");
-    if (target) setReplayLock(target, true);
+    setReplayLock(target, true);
     try {
       const res = (await api(
         `/api/actions/${encodeURIComponent(a.id)}/replay`,
         {
           method: "POST",
-          headers: { "x-actor": "human" },
           body: JSON.stringify({ speed: 1 }),
         },
         130_000,
@@ -63,7 +70,7 @@ export function RecipesPanel() {
       setMsg(
         res && res.success === false
           ? res.reason ?? "rejected"
-          : `Replayed "${a.name}"`,
+          : `Replayed “${a.name}” on ${target}`,
       );
     } catch (err) {
       play("error");
@@ -80,7 +87,6 @@ export function RecipesPanel() {
     try {
       await api(`/api/actions/${encodeURIComponent(a.id)}`, {
         method: "DELETE",
-        headers: { "x-actor": "human" },
       });
       play("delete");
       load();
@@ -110,6 +116,13 @@ export function RecipesPanel() {
 
   return (
     <div className="insp-body">
+      {selectedComputer ? (
+        <p className="recipe-target">
+          Replay runs on <strong>{selectedComputer}</strong>
+        </p>
+      ) : (
+        <p className="recipe-target">Select a computer, then Replay.</p>
+      )}
       {msg ? <span className="tl-savemsg">{msg}</span> : null}
       <div className="tl-list recipes">
         {actions.map((a) => (

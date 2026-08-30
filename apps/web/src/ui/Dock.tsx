@@ -12,6 +12,7 @@ import { store, useStore } from "../store/index.ts";
 import { selectDock } from "../store/selectors.ts";
 import { play } from "./sound.ts";
 import { registerDockShelf, registerDockTile } from "./wm/dockTiles.ts";
+import { fpsTone } from "./wm/streamFps.ts";
 
 function wallpaperOf(c: Computer): WallpaperId {
   return c.wallpaper ?? "carbon";
@@ -37,6 +38,7 @@ export function Dock() {
     actingComputerId,
     minimized,
     computersRunning,
+    streamFps,
   } = useStore(useShallow(selectDock));
   const tiles = useRef(new Map<string, HTMLButtonElement>());
   const centers = useRef<number[]>([]);
@@ -117,13 +119,16 @@ export function Dock() {
           const min = minimized.includes(c.id);
           const wp = wallpaperOf(c);
           const [a, b] = TINT[wp] ?? TINT.carbon!;
+          const fps = streamFps[c.id];
           return (
             <button
               key={c.id}
               ref={register(c.id)}
               type="button"
               className={`dock-tile wp-${wp}${selected ? " selected" : ""}${acting ? " acting" : ""}${min ? " min" : ""}${c.status === "starting" ? " starting" : ""}${c.status === "error" ? " error" : ""}${bounce === c.id ? " bounce" : ""}`}
-              aria-label={c.name}
+              aria-label={
+                typeof fps === "number" ? `${c.name}, ${fps} fps` : c.name
+              }
               aria-current={selected ? "true" : undefined}
               onClick={() => {
                 const s = store.getState();
@@ -150,8 +155,16 @@ export function Dock() {
                   <rect x="14" y="37" width="20" height="3" rx="1.5" fill="rgba(255,255,255,.18)" />
                 </svg>
               </span>
+              {c.status === "running" ? (
+                <span
+                  className={`dock-fps${typeof fps === "number" ? ` ${fpsTone(fps)}` : ""}`}
+                >
+                  {typeof fps === "number" ? fps : "—"}
+                </span>
+              ) : null}
               <span className="dock-tip">
                 {c.name}
+                {typeof fps === "number" ? ` · ${fps} fps` : ""}
                 {min ? " — hidden" : acting ? " — agent" : ""}
               </span>
               <span className="dock-dot" />

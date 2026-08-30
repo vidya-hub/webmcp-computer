@@ -69,7 +69,6 @@ export function WorkspaceTools() {
       const computerId = String(input.computerId) as ComputerId;
       const data = await api("/api/workspace/select", {
         method: "POST",
-        headers: { "x-actor": "agent" },
         body: JSON.stringify({ computerId }),
       });
       return toolResult(data);
@@ -98,7 +97,6 @@ export function WorkspaceTools() {
         "/api/computers",
         {
           method: "POST",
-          headers: { "x-actor": "agent" },
           body: JSON.stringify({
             name: input.name !== undefined ? String(input.name) : undefined,
             role: input.role !== undefined ? String(input.role) : undefined,
@@ -139,7 +137,7 @@ export function WorkspaceTools() {
     execute: async (input) => {
       const data = await api(
         `/api/archives/${encodeURIComponent(String(input.archiveId))}`,
-        { method: "DELETE", headers: { "x-actor": "agent" } },
+        { method: "DELETE" },
       );
       return toolResult(data);
     },
@@ -165,7 +163,7 @@ export function WorkspaceTools() {
       const id = String(input.computerId);
       const data = await api(
         `/api/computers/${encodeURIComponent(id)}`,
-        { method: "DELETE", headers: { "x-actor": "agent" } },
+        { method: "DELETE" },
         130_000,
       );
       return toolResult(data);
@@ -188,7 +186,6 @@ export function WorkspaceTools() {
       const id = String(input.computerId);
       const data = await api(`/api/computers/${encodeURIComponent(id)}/name`, {
         method: "POST",
-        headers: { "x-actor": "agent" },
         body: JSON.stringify({ name: String(input.name) }),
       });
       return toolResult(data);
@@ -216,7 +213,6 @@ export function WorkspaceTools() {
         "/api/choice",
         {
           method: "POST",
-          headers: { "x-actor": "agent" },
           body: JSON.stringify({ question: String(input.question), options }),
         },
         130_000,
@@ -348,12 +344,19 @@ export function WorkspaceTools() {
         if (!id) return toolResult({ error: `No recipe named ${input.name}` });
       }
       if (!id) return toolResult({ error: "actionId or name required" });
+      // Agent replay goes through /api/act {op:replayAction} so the control
+      // plane's recipe gate runs (the /api/actions/:id/replay route is the
+      // human, honor-system path). Fetch the steps, then replay them.
+      const recipe = await api<{ steps: unknown[] }>(
+        `/api/actions/${encodeURIComponent(id)}`,
+      );
       const data = await api(
-        `/api/actions/${encodeURIComponent(id)}/replay`,
+        "/api/act",
         {
           method: "POST",
-          headers: { "x-actor": "agent" },
           body: JSON.stringify({
+            op: "replayAction",
+            steps: recipe.steps ?? [],
             speed: input.speed !== undefined ? Number(input.speed) : 1,
           }),
         },
@@ -383,7 +386,6 @@ export function WorkspaceTools() {
         "/api/actions",
         {
           method: "POST",
-          headers: { "x-actor": "agent" },
           body: JSON.stringify({
             name: String(input.name),
             description:
@@ -410,7 +412,7 @@ export function WorkspaceTools() {
     execute: async (input) => {
       const data = await api(
         `/api/actions/${encodeURIComponent(String(input.actionId))}`,
-        { method: "DELETE", headers: { "x-actor": "agent" } },
+        { method: "DELETE" },
       );
       return toolResult(data);
     },

@@ -19,3 +19,18 @@ test("injectSelkiesCapture inserts before </body>", () => {
   assert.match(html, /__webmcpRecord/);
   assert.ok(html.indexOf("__webmcpRecord") < html.indexOf("</body>"));
 });
+
+test("takeover overlay is injected for the Selkies primary-client kill", () => {
+  const html = injectSelkiesCapture("<html><body></body></html>");
+  assert.match(html, /__webmcpTakeover/);
+  assert.match(html, /Use this tab/);
+  assert.match(html, /new primary client/);
+});
+
+test("fps reporter is injected and posts origin-checked telemetry", () => {
+  const html = injectSelkiesCapture("<html><body></body></html>");
+  assert.match(html, /__webmcpFps/);
+  assert.match(html, /type:"fps"/);
+  assert.match(html, /requestVideoFrameCallback/);
+  assert.match(html, /getVideoPlaybackQuality/);
+});

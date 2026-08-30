@@ -35,7 +35,7 @@ function enqueueEvent(step: unknown): void {
   queue = queue.then(() =>
     api(
       "/api/record/event",
-      { method: "POST", headers: { "x-actor": "human" }, body: JSON.stringify(step) },
+      { method: "POST", body: JSON.stringify(step) },
     ).then(
       () => undefined,
       () => undefined,
@@ -66,7 +66,6 @@ export async function startRecording(computerId: string): Promise<void> {
   }
   await api("/api/record/start", {
     method: "POST",
-    headers: { "x-actor": "human" },
     body: "{}",
   });
   activeId = computerId;
@@ -109,7 +108,6 @@ export async function stopRecording(
   try {
     await api("/api/record/stop", {
       method: "POST",
-      headers: { "x-actor": "human" },
       body: JSON.stringify({ name, description }),
     });
   } finally {

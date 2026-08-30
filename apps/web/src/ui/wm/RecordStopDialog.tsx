@@ -9,6 +9,7 @@ export function RecordStopDialog({ onCancel, onSave }: Props) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -26,8 +27,11 @@ export function RecordStopDialog({ onCancel, onSave }: Props) {
   async function save() {
     if (!name.trim() || saving) return;
     setSaving(true);
+    setErr(null);
     try {
       await onSave(name.trim(), description.trim());
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "save failed");
     } finally {
       setSaving(false);
     }
@@ -67,6 +71,7 @@ export function RecordStopDialog({ onCancel, onSave }: Props) {
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
+        {err ? <p className="sheet-err">{err}</p> : null}
         <div className="sheet-actions">
           <button type="button" className="btn-ghost" onClick={onCancel}>
             Cancel

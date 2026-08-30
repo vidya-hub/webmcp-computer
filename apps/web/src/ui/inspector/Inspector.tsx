@@ -82,10 +82,15 @@ export function Inspector() {
           aria-label="close inspector"
           onClick={() => store.getState().closeInspector()}
         >
-          ✕
+          Close
         </button>
       </div>
-      {tab === "tape" ? <ActionTimeline /> : <RecipesPanel />}
+      <div className="insp-pane" hidden={tab !== "tape"}>
+        <ActionTimeline active={tab === "tape"} />
+      </div>
+      <div className="insp-pane" hidden={tab !== "recipes"}>
+        <RecipesPanel active={tab === "recipes"} />
+      </div>
     </aside>
   );
 }

@@ -13,6 +13,7 @@ export default defineConfig({
       "Permissions-Policy": "unload=*, tools=(self)",
     },
     proxy: {
+      "/auth": { target: "http://127.0.0.1:8788" },
       "/api": { target: "http://127.0.0.1:8787", ws: true },
       "/desktops": {
         target: "http://127.0.0.1:8787",

@@ -8,6 +8,7 @@ import { WindowFrame } from "./Window.tsx";
 
 export function Canvas() {
   const computers = useStore((s) => s.computers);
+  const apiOnline = useStore((s) => s.apiOnline);
   const snap = useStore((s) => s.snap);
   const draggingId = useStore((s) => s.draggingId);
   const canvas = useStore(useShallow((s) => s.canvas));
@@ -79,7 +80,7 @@ export function Canvas() {
     <div className="wm-stage">
       <div className="wm-canvas" ref={ref}>
         <div className="wm-wallpaper" aria-hidden />
-        {computers.length === 0 ? (
+        {computers.length === 0 && apiOnline ? (
           <div className="desk-blank">
             <div className="desk-onboard">
               <div className="desk-onboard-mark" />

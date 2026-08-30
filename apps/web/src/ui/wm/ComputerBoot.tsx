@@ -3,20 +3,26 @@ import type { Computer } from "@webmcp-computer/contract";
 import { play } from "../sound.ts";
 import { prefersReducedMotion } from "./motion.ts";
 
-const OPENING = ["post ......... ok", "memory ....... ok", "vnc :1 ....... ok", "desktop ...... starting"];
+const OPENING = [
+  "post ......... ok",
+  "memory ....... ok",
+  "vnc :1 ....... ok",
+  "desktop ...... starting",
+];
 
 export function ComputerBoot({ computer }: { computer: Computer }) {
+  const starting = computer.status === "starting";
   const [phase, setPhase] = useState<"in" | "out" | "off">(
-    computer.status === "starting" ? "in" : "off",
+    starting ? "in" : "off",
   );
   const [lines, setLines] = useState<string[]>(() =>
-    prefersReducedMotion() || computer.status !== "starting" ? [...OPENING, "waiting for desktop…"] : [],
+    starting && !prefersReducedMotion() ? [] : [...OPENING, "waiting for desktop…"],
   );
   const started = useRef(false);
   const reduced = prefersReducedMotion();
 
   useEffect(() => {
-    if (computer.status === "starting") {
+    if (starting) {
       setPhase("in");
       if (!started.current) {
         started.current = true;
@@ -28,20 +34,21 @@ export function ComputerBoot({ computer }: { computer: Computer }) {
     play(computer.status === "error" ? "error" : "complete");
     if (computer.status === "error") {
       setLines((ls) => [...ls, "bridge not healthy"]);
-      const hold = window.setTimeout(() => setPhase("out"), reduced ? 0 : 600);
-      const hide = window.setTimeout(() => setPhase("off"), reduced ? 0 : 1000);
-      return () => {
-        window.clearTimeout(hold);
-        window.clearTimeout(hide);
-      };
     }
     setPhase("out");
-    const t = window.setTimeout(() => setPhase("off"), reduced ? 0 : 380);
-    return () => window.clearTimeout(t);
-  }, [computer.status, phase, reduced]);
+    // phase is intentionally not a dep: this must run once when status leaves
+    // "starting", then the out→off timer lives in the effect below.
+  }, [computer.status, starting]);
 
   useEffect(() => {
-    if (computer.status !== "starting" || reduced) return;
+    if (phase !== "out") return;
+    const ms = reduced || computer.status !== "error" ? (reduced ? 0 : 380) : 1000;
+    const t = window.setTimeout(() => setPhase("off"), ms);
+    return () => window.clearTimeout(t);
+  }, [phase, reduced, computer.status]);
+
+  useEffect(() => {
+    if (!starting || reduced) return;
     let i = 0;
     const timers: number[] = [];
     const tick = () => {
@@ -59,10 +66,13 @@ export function ComputerBoot({ computer }: { computer: Computer }) {
       window.setTimeout(() => setLines((ls) => [...ls, "still waiting…"]), 5000),
     );
     timers.push(
-      window.setTimeout(() => setLines((ls) => [...ls, "desktop taking longer than usual"]), 15000),
+      window.setTimeout(
+        () => setLines((ls) => [...ls, "desktop taking longer than usual"]),
+        15000,
+      ),
     );
     return () => timers.forEach((t) => window.clearTimeout(t));
-  }, [computer.status, reduced]);
+  }, [starting, reduced]);
 
   if (phase === "off") return null;
   return (
@@ -75,7 +85,7 @@ export function ComputerBoot({ computer }: { computer: Computer }) {
         {lines.map((line, i) => (
           <p key={`${line}-${i}`}>{line}</p>
         ))}
-        {computer.status === "starting" ? (
+        {starting ? (
           <p>
             <span className="bootseq-cursor" />
           </p>

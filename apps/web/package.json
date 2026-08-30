@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 5173 --strictPort",
     "typecheck": "tsc -b --noEmit",
-    "test": "tsx --test src/store/slices/wm.test.ts"
+    "test": "tsx --test src/store/slices/wm.test.ts src/ui/ActionTimeline.test.ts src/ui/wm/streamFps.test.ts src/auth/gate.test.ts"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.2.8",

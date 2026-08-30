@@ -10,6 +10,7 @@ import { MenuBar } from "./MenuBar.tsx";
 import { Toasts } from "./Toasts.tsx";
 import { play, unlockSound } from "./sound.ts";
 import { Canvas } from "./wm/Canvas.tsx";
+import { listenStreamFps } from "./wm/streamFps.ts";
 
 const IDLE_MS = 60_000;
 
@@ -18,6 +19,10 @@ export function Shell() {
     useStore(useShallow(selectShellChrome));
   const prevOnline = useRef<boolean | null>(null);
   const onlineCueAt = useRef(0);
+
+  useEffect(() => {
+    listenStreamFps();
+  }, []);
 
   useEffect(() => {
     if (!pendingApproval) return;

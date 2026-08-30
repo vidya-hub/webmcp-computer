@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { RecordedAction, TapeEvent } from "@webmcp-computer/contract";
 import { api } from "../api/client.ts";
 import { store, useStore } from "../store/index.ts";
+import { shortComputerId, tickMarks } from "./tapeTicks.ts";
 
 function dump(v: unknown): string {
   if (v === undefined || v === null) return "";
@@ -19,6 +21,26 @@ function clock(iso: string) {
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
+  });
+}
+
+function tickLabel(t: number, step: number) {
+  const d = new Date(t);
+  if (step >= 86_400_000) {
+    return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  }
+  if (step >= 3_600_000) {
+    return d.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  }
+  return d.toLocaleTimeString([], {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
   });
 }
 
@@ -56,11 +78,13 @@ function laneKind(op: string): string {
   return "input";
 }
 
-export function ActionTimeline() {
+export function ActionTimeline({ active = true }: { active?: boolean }) {
   const liveTape = useStore((s) => s.tape);
   const filter = useStore((s) => s.tapeFilter);
   const focusNonce = useStore((s) => s.tapeFocusNonce);
   const [history, setHistory] = useState<TapeEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const events = useMemo(() => {
     const byId = new Map<string, TapeEvent>();
     for (const e of history) byId.set(e.id, e);
@@ -76,6 +100,7 @@ export function ActionTimeline() {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState(0);
   const trackRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   async function submitSave() {
     const name = saveName.trim();
@@ -86,7 +111,6 @@ export function ActionTimeline() {
         "/api/actions/promote",
         {
           method: "POST",
-          headers: { "x-actor": "human" },
           body: JSON.stringify({ count: saveCount, name, description: "" }),
         },
         130_000,
@@ -100,15 +124,24 @@ export function ActionTimeline() {
   }
 
   useEffect(() => {
+    let gone = false;
     void api<{ events: TapeEvent[] }>("/api/tape")
       .then((d) => {
+        if (gone) return;
         const list = d.events ?? [];
         setHistory(list);
+        store.getState().hydrateTape(list);
         setSelectedId((id) => id ?? list[0]?.id ?? null);
+        setLoading(false);
       })
-      .catch(() => {
-        /* offline */
+      .catch((err) => {
+        if (gone) return;
+        setLoadError(err instanceof Error ? err.message : "tape unavailable");
+        setLoading(false);
       });
+    return () => {
+      gone = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -122,6 +155,7 @@ export function ActionTimeline() {
   }, [selectedId, events]);
 
   useEffect(() => {
+    if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -130,15 +164,18 @@ export function ActionTimeline() {
         else store.getState().closeInspector();
         return;
       }
-      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "ArrowUp" && e.key !== "ArrowDown") {
+        return;
+      }
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
       const rows = (filter === "all" ? events : events.filter((ev) => ev.computerId === filter))
         .slice()
-        .sort((a, b) => (a.at < b.at ? -1 : 1));
+        .sort((a, b) => (a.at < b.at ? 1 : -1));
       if (rows.length === 0) return;
       const i = rows.findIndex((r) => r.id === selectedId);
-      const next = e.key === "ArrowRight" ? Math.min(rows.length - 1, i + 1) : Math.max(0, i - 1);
+      const dir = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : -1;
+      const next = Math.min(rows.length - 1, Math.max(0, (i < 0 ? 0 : i) + dir));
       if (rows[next]) {
         e.preventDefault();
         setSelectedId(rows[next]!.id);
@@ -146,24 +183,32 @@ export function ActionTimeline() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [lightbox, events, filter, selectedId]);
+  }, [active, lightbox, events, filter, selectedId]);
 
   const computers = useMemo(() => {
     const ids: string[] = [];
     for (const e of events) {
       if (!ids.includes(e.computerId)) ids.push(e.computerId);
     }
+    if (filter !== "all" && !ids.includes(filter)) ids.unshift(filter);
     return ids;
-  }, [events]);
+  }, [events, filter]);
 
   const lanes = filter === "all" ? computers : computers.filter((id) => id === filter);
   const rows = filter === "all" ? events : events.filter((e) => e.computerId === filter);
   const selected = rows.find((e) => e.id === selectedId) ?? rows[0] ?? null;
 
+  useEffect(() => {
+    if (!selected) return;
+    const el = listRef.current?.querySelector(`[data-tape-id="${selected.id}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [selected?.id]);
+
   const times = events.map((e) => Date.parse(e.at)).filter((n) => Number.isFinite(n));
   const tMin = times.length ? Math.min(...times) : Date.now();
   const tMax = times.length ? Math.max(...times) + 2000 : tMin + 8000;
   const span = Math.max(1000, tMax - tMin);
+  const { ticks, step } = tickMarks(tMin, tMax);
 
   function xOf(iso: string, width: number): number {
     const t = Date.parse(iso);
@@ -195,9 +240,7 @@ export function ActionTimeline() {
     window.addEventListener("pointerup", up);
   }
 
-  const ticks: number[] = [];
-  const step = span > 60_000 ? 15_000 : span > 15_000 ? 5_000 : 1000;
-  for (let t = Math.floor(tMin / step) * step; t <= tMax; t += step) ticks.push(t);
+  const empty = !loading && events.length === 0;
 
   return (
     <div className="insp-tape">
@@ -216,28 +259,31 @@ export function ActionTimeline() {
                 key={id}
                 type="button"
                 className={`tl-chip${filter === id ? " on" : ""}`}
+                title={id}
                 onClick={() => store.getState().setTapeFilter(id)}
               >
-                {id}
+                {shortComputerId(id)}
               </button>
             ))}
           </div>
         ) : null}
-        {events.length > 0 ? (
-          <button
-            type="button"
-            className="tl-chip"
-            onClick={() => {
-              setSaving((v) => !v);
-              setSaveMsg(null);
-            }}
-          >
-            Save as recipe
+        <div className="tl-bar-tools">
+          {events.length > 0 ? (
+            <button
+              type="button"
+              className="tl-chip"
+              onClick={() => {
+                setSaving((v) => !v);
+                setSaveMsg(null);
+              }}
+            >
+              Save as recipe
+            </button>
+          ) : null}
+          <button type="button" className="tl-chip" onClick={() => { setZoom(1); setPan(0); }}>
+            Fit
           </button>
-        ) : null}
-        <button type="button" className="tl-chip" onClick={() => { setZoom(1); setPan(0); }}>
-          Fit
-        </button>
+        </div>
       </div>
       {saving ? (
         <div className="tl-saveform">
@@ -272,13 +318,46 @@ export function ActionTimeline() {
           <span className="tl-savemsg">{saveMsg}</span>
         </div>
       ) : null}
-      {events.length === 0 ? (
+      {loading && events.length === 0 ? (
+        <div className="tl-blank">
+          <h2>Loading tape…</h2>
+          <p>Fetching recorded actions.</p>
+        </div>
+      ) : empty && loadError ? (
+        <div className="tl-blank">
+          <h2>Tape unavailable</h2>
+          <p>{loadError}</p>
+        </div>
+      ) : empty ? (
         <div className="tl-blank">
           <h2>No actions yet</h2>
           <p>Actions will land here as the agent works.</p>
         </div>
+      ) : rows.length === 0 ? (
+        <div className="tl-blank">
+          <h2>No actions on this computer</h2>
+          <p>Switch to All to see the rest of the tape.</p>
+        </div>
       ) : (
         <div className="tl-body tape">
+          <div className="tl-list tape-events" ref={listRef}>
+            {rows.map((e) => (
+              <button
+                key={e.id}
+                type="button"
+                data-tape-id={e.id}
+                className={`tl-row${selected?.id === e.id ? " on" : ""}${e.error ? " err" : ""}`}
+                onClick={() => setSelectedId(e.id)}
+              >
+                <span className="tl-time">{clock(e.at)}</span>
+                <span className="tl-op">{e.op}</span>
+                <span className="tl-host">
+                  {shortComputerId(e.computerId)}
+                  {e.detail ? ` · ${e.detail}` : ""}
+                </span>
+              </button>
+            ))}
+          </div>
           <div
             className="tl-water"
             onWheel={onWheel}
@@ -290,9 +369,14 @@ export function ActionTimeline() {
                 <span
                   key={t}
                   className="tl-tick"
-                  style={{ left: ((t - tMin) / span) * 100 * zoom + (pan / Math.max(1, trackRef.current?.clientWidth ?? 1)) * 100 + "%" }}
+                  style={{
+                    left:
+                      ((t - tMin) / span) * 100 * zoom +
+                      (pan / Math.max(1, trackRef.current?.clientWidth ?? 1)) * 100 +
+                      "%",
+                  }}
                 >
-                  {new Date(t).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                  {tickLabel(t, step)}
                 </span>
               ))}
             </div>
@@ -301,7 +385,7 @@ export function ActionTimeline() {
               return (
                 <div key={id} className="tl-lane">
                   <div className="tl-gutter" title={id}>
-                    {id}
+                    {shortComputerId(id)}
                   </div>
                   <div className="tl-track">
                     {laneEvents.map((e) => {
@@ -370,11 +454,14 @@ export function ActionTimeline() {
           </div>
         </div>
       )}
-      {lightbox ? (
-        <button type="button" className="tl-lightbox" onClick={() => setLightbox(null)}>
-          <img src={lightbox} alt="" />
-        </button>
-      ) : null}
+      {lightbox
+        ? createPortal(
+            <button type="button" className="tl-lightbox" onClick={() => setLightbox(null)}>
+              <img src={lightbox} alt="" />
+            </button>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -393,7 +480,7 @@ function Shot({
   if (!ok) {
     return (
       <div className="tl-shot missing">
-        <span>{label}</span>
+        <span>{label} · not captured</span>
       </div>
     );
   }

@@ -3,20 +3,21 @@ import { createRoot } from "react-dom/client";
 import { initializeWebMCPPolyfill } from "@mcp-b/webmcp-polyfill";
 import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/700.css";
-import App from "./App.tsx";
-import { probeWebmcp, startSync } from "./store/sync.ts";
+import { AuthGate } from "./ui/AuthGate.tsx";
+import { probeWebmcp } from "./store/sync.ts";
 import "./styles/tokens.css";
 import "./styles/axiom.css";
 
+// The polyfill can initialize, but tools/sync/iframes only mount once AuthGate
+// has a session. startSync is called from the session layer, not here.
 initializeWebMCPPolyfill();
 patchNativeRegisterTool();
 probeWebmcp();
 window.setTimeout(probeWebmcp, 50);
-startSync();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <AuthGate />
   </StrictMode>,
 );
 
