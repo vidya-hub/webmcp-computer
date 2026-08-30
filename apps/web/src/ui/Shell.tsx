@@ -1,34 +1,46 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { ComputerId } from "@webmcp-computer/contract";
 import { useShallow } from "zustand/react/shallow";
 import { store, useStore } from "../store/index.ts";
 import { selectShellChrome } from "../store/selectors.ts";
-import { ActionTimeline } from "./ActionTimeline.tsx";
 import { ApprovalDialog } from "./ApprovalDialog.tsx";
-import { BootSequence } from "./BootSequence.tsx";
 import { Dock } from "./Dock.tsx";
+import { Inspector } from "./inspector/Inspector.tsx";
 import { MenuBar } from "./MenuBar.tsx";
 import { Toasts } from "./Toasts.tsx";
-import { blip } from "./sound.ts";
+import { play, unlockSound } from "./sound.ts";
 import { Canvas } from "./wm/Canvas.tsx";
+import { listenStreamFps } from "./wm/streamFps.ts";
 
 const IDLE_MS = 60_000;
 
 export function Shell() {
-  const {
-    justBooted,
-    idle,
-    actingComputerId,
-    booted,
-    bootNonce,
-    timelineOpen,
-    pendingApproval,
-  } = useStore(useShallow(selectShellChrome));
+  const { idle, actingComputerId, timelineOpen, pendingApproval, apiOnline } =
+    useStore(useShallow(selectShellChrome));
+  const prevOnline = useRef<boolean | null>(null);
+  const onlineCueAt = useRef(0);
+
+  useEffect(() => {
+    listenStreamFps();
+  }, []);
 
   useEffect(() => {
     if (!pendingApproval) return;
-    blip("chime");
+    play("warning");
   }, [pendingApproval?.id]);
+
+  useEffect(() => {
+    if (prevOnline.current === null) {
+      prevOnline.current = apiOnline;
+      return;
+    }
+    if (prevOnline.current === apiOnline) return;
+    prevOnline.current = apiOnline;
+    const now = Date.now();
+    if (now - onlineCueAt.current < 4000) return;
+    onlineCueAt.current = now;
+    play(apiOnline ? "connect" : "disconnect");
+  }, [apiOnline]);
 
   useEffect(() => {
     let last = Date.now();
@@ -52,12 +64,21 @@ export function Shell() {
   }, []);
 
   useEffect(() => {
+    const unlock = () => unlockSound();
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
       const s = store.getState();
-      if (!s.booted) return;
       if (e.key === "Escape") {
         if (s.timelineOpen) return;
         if (s.pendingApproval) {
@@ -85,26 +106,15 @@ export function Shell() {
   }, []);
 
   return (
-    <div
-      className={`shell${justBooted ? " booted-fresh" : ""}${
-        idle && !actingComputerId ? " idle" : ""
-      }`}
-    >
+    <div className={`shell${idle && !actingComputerId ? " idle" : ""}`}>
       <MenuBar />
       <div className="desktop">
         <Canvas />
-        <div className="grain" aria-hidden />
         <Toasts />
         <Dock />
       </div>
+      {timelineOpen ? <Inspector /> : null}
       <ApprovalDialog />
-      <ActionTimeline
-        open={timelineOpen}
-        onClose={() => store.getState().setTimelineOpen(false)}
-      />
-      {!booted ? (
-        <BootSequence key={bootNonce} onDone={() => store.getState().finishBoot()} />
-      ) : null}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import type {
   Approval,
   Computer,
   ComputerId,
+  TapeEvent,
   WorkspaceState,
 } from "@webmcp-computer/contract";
 import { api } from "../../api/client.ts";
@@ -15,14 +16,16 @@ export type ServerSlice = {
   selectedComputer: ComputerId | null;
   pendingApproval: Approval | null;
   activity: ActivityEvent[];
+  tape: TapeEvent[];
   computersRunning: number;
   webmcpReady: boolean;
+  recordingComputerId: ComputerId | null;
   actingComputerId: ComputerId | null;
   actingVerb: string | null;
   beginAct: (verb: string) => void;
   endAct: () => void;
   selectComputer: (id: ComputerId) => Promise<void>;
-  spawnComputer: () => Promise<void>;
+  spawnComputer: (restoreArchiveId?: string) => Promise<void>;
   destroyComputer: (id: ComputerId) => Promise<void>;
   resolveApproval: (
     id: string,
@@ -30,10 +33,13 @@ export type ServerSlice = {
   ) => Promise<void>;
   resolveChoice: (id: string, choice: string) => Promise<void>;
   setWebmcpReady: (ready: boolean) => void;
+  setRecordingComputerId: (id: ComputerId | null) => void;
   applyWorkspace: (w: WorkspaceState) => void;
   upsertComputer: (computer: Computer) => void;
   removeComputer: (id: ComputerId) => void;
   prependActivity: (event: ActivityEvent) => void;
+  prependTape: (event: TapeEvent) => void;
+  hydrateTape: (events: TapeEvent[]) => void;
   setPendingApproval: (approval: Approval | null) => void;
   setSelectedComputer: (id: ComputerId | null) => void;
   setApiOnline: (online: boolean) => void;
@@ -55,8 +61,10 @@ export function createServerSlice(set: StoreSet, get: StoreGet): ServerSlice {
     selectedComputer: null,
     pendingApproval: null,
     activity: [],
+    tape: [],
     computersRunning: 0,
     webmcpReady: false,
+    recordingComputerId: null,
     actingComputerId: null,
     actingVerb: null,
 
@@ -68,6 +76,7 @@ export function createServerSlice(set: StoreSet, get: StoreGet): ServerSlice {
     endAct: () => set({ actingComputerId: null, actingVerb: null }),
 
     setWebmcpReady: (ready) => set({ webmcpReady: ready }),
+    setRecordingComputerId: (id) => set({ recordingComputerId: id }),
     setApiOnline: (online) => set({ apiOnline: online }),
     setSelectedComputer: (id) => set({ selectedComputer: id }),
     setPendingApproval: (approval) =>
@@ -77,17 +86,48 @@ export function createServerSlice(set: StoreSet, get: StoreGet): ServerSlice {
       }),
 
     applyWorkspace: (w) =>
-      set({
+      set((s) => ({
         selectedComputer: w.selectedComputer,
         pendingApproval: w.pendingApproval,
         activity: w.activityHead,
         computersRunning: w.computersRunning,
-      }),
+        // Older APIs omit this field; keep the live REC id so a mixed
+        // deploy / select-away poll cannot wipe an in-progress recording.
+        recordingComputerId:
+          w.recordingComputerId !== undefined
+            ? w.recordingComputerId
+            : s.recordingComputerId,
+      })),
 
     prependActivity: (event) =>
       set((s) => {
         if (s.activity.some((e) => e.id === event.id)) return {};
         return { activity: [event, ...s.activity].slice(0, 40) };
+      }),
+
+    prependTape: (event) =>
+      set((s) => {
+        // Replace an existing event by id: the same event is emitted
+        // optimistically and again once before/after shots are recorded.
+        const existing = s.tape.findIndex((e) => e.id === event.id);
+        if (existing !== -1) {
+          const tape = s.tape.slice();
+          tape[existing] = event;
+          return { tape };
+        }
+        return { tape: [event, ...s.tape].slice(0, 200) };
+      }),
+
+    hydrateTape: (events) =>
+      set((s) => {
+        const byId = new Map<string, TapeEvent>();
+        for (const e of events) byId.set(e.id, e);
+        for (const e of s.tape) byId.set(e.id, e);
+        return {
+          tape: [...byId.values()]
+            .sort((a, b) => (a.at < b.at ? 1 : -1))
+            .slice(0, 200),
+        };
       }),
 
     upsertComputer: (computer) => {
@@ -108,14 +148,18 @@ export function createServerSlice(set: StoreSet, get: StoreGet): ServerSlice {
     },
 
     replaceSnapshot: ({ computers, workspace }) => {
-      set({
+      set((s) => ({
         apiOnline: true,
         computers,
         selectedComputer: workspace.selectedComputer,
         pendingApproval: workspace.pendingApproval,
         activity: workspace.activityHead,
         computersRunning: workspace.computersRunning,
-      });
+        recordingComputerId:
+          workspace.recordingComputerId !== undefined
+            ? workspace.recordingComputerId
+            : s.recordingComputerId,
+      }));
     },
 
     clearSnapshot: () => {
@@ -126,23 +170,22 @@ export function createServerSlice(set: StoreSet, get: StoreGet): ServerSlice {
         pendingApproval: null,
         activity: [],
         computersRunning: 0,
+        recordingComputerId: null,
       });
     },
 
     selectComputer: async (id) => {
       const w = await api<WorkspaceState>("/api/workspace/select", {
         method: "POST",
-        headers: { "x-actor": "human" },
         body: JSON.stringify({ computerId: id }),
       });
       get().applyWorkspace(w);
     },
 
-    spawnComputer: async () => {
+    spawnComputer: async (restoreArchiveId) => {
       await api("/api/computers", {
         method: "POST",
-        headers: { "x-actor": "human" },
-        body: "{}",
+        body: JSON.stringify(restoreArchiveId ? { restoreArchiveId } : {}),
       });
       await fetchSnapshot(get);
     },
@@ -150,7 +193,6 @@ export function createServerSlice(set: StoreSet, get: StoreGet): ServerSlice {
     destroyComputer: async (id) => {
       const req = api(`/api/computers/${encodeURIComponent(id)}`, {
         method: "DELETE",
-        headers: { "x-actor": "human" },
       }).then(
         () => fetchSnapshot(get),
         () => fetchSnapshot(get),

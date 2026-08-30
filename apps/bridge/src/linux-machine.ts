@@ -16,8 +16,10 @@ import {
   type DeskWindow,
   type FileList,
   type LaunchApp,
+  dispatch,
   type Machine,
   type MouseButton,
+  type RecipeStep,
   type Shot,
   type ThemeId,
   type WallpaperId,
@@ -401,6 +403,70 @@ export class LinuxMachine implements Machine {
 
   async browserScreenshot(fullPage?: boolean): Promise<Shot> {
     return capturePage(fullPage !== false);
+  }
+
+  // Replay a saved recipe in-guest as a single call so timing/pacing don't cost
+  // one HTTP round-trip per step. Each op flows through the same dispatch() the
+  // bridge uses for live ops. Approval gating already happened API-side before
+  // this op was sent, so steps run without re-prompting.
+  async replayAction(steps: RecipeStep[], speed = 1): Promise<{ ran: number }> {
+    const rate = speed > 0 ? speed : 1;
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms / rate));
+    let ran = 0;
+    let prevT: number | undefined;
+    for (const step of steps) {
+      // Pace by the recorded timeline when present, else a small settle.
+      if (typeof step.t === "number") {
+        const gap = prevT === undefined ? 0 : step.t - prevT;
+        prevT = step.t;
+        if (gap > 0) await sleep(Math.min(gap, 5_000));
+      } else {
+        await sleep(120);
+      }
+      switch (step.kind) {
+        case "wait":
+          await sleep(Math.min(step.ms, 5_000));
+          break;
+        case "note":
+          break;
+        case "click":
+          await this.mouseClick({
+            x: step.x,
+            y: step.y,
+            button: step.button,
+            clicks: step.clicks,
+          });
+          ran += 1;
+          break;
+        case "drag":
+          await this.mouseDrag({
+            fromX: step.fromX,
+            fromY: step.fromY,
+            toX: step.toX,
+            toY: step.toY,
+          });
+          ran += 1;
+          break;
+        case "scroll":
+          await this.scroll({ x: step.x, y: step.y, dy: step.dy });
+          ran += 1;
+          break;
+        case "type":
+          await desk.typeText(step.text, 0);
+          ran += 1;
+          break;
+        case "key":
+          await this.key(step.keys);
+          ran += 1;
+          break;
+        case "op":
+          if (step.op.op === "typeText") await desk.typeText(step.op.text, 0);
+          else await dispatch(this, step.op);
+          ran += 1;
+          break;
+      }
+    }
+    return { ran };
   }
 
   private wait(command: string, cwd: string): Promise<CommandResult> {

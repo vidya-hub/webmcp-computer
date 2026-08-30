@@ -1,4 +1,6 @@
-FROM debian:bookworm-slim
+# Selkies 2.x (pixelflux). GitHub releases/latest is still 1.6.2 GStreamer — do not use it.
+FROM ghcr.io/selkies-project/selkies/base@sha256:90d7a14739b0ba985145b02f0e1e325e7c5bd82dade5673a33a6b1a8f4deea21 AS selkies
+FROM debian:trixie-slim
 
 RUN printf '%s\n' \
     'path-exclude=/usr/share/doc/*' \
@@ -24,6 +26,20 @@ RUN apt-get update \
     pcmanfm \
     picom \
     python3 \
+    libdrm2 \
+    libgbm1 \
+    libva2 \
+    libva-drm2 \
+    libva-x11-2 \
+    libx11-6 \
+    libx11-xcb1 \
+    libxcb1 \
+    libxcb-dri3-0 \
+    libxext6 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libpixman-1-0 \
+    libexpat1 \
     ripgrep \
     scrot \
     sudo \
@@ -174,13 +190,20 @@ RUN set -eu \
 COPY infra/slim/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY infra/slim/session.sh /usr/local/bin/session.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/session.sh
+COPY --from=selkies /usr/local/lib/python3.13/dist-packages /usr/local/lib/python3.13/dist-packages
+COPY --from=selkies /usr/local/bin/selkies /usr/local/bin/selkies
+COPY --from=selkies /usr/local/bin/selkies-resize /usr/local/bin/selkies-resize
+COPY --from=selkies /usr/local/bin/selkies-gpu-probe /usr/local/bin/selkies-gpu-probe
+RUN python3 -c "import pixelflux, selkies" \
+  && selkies --help 2>&1 | grep -q -- '--mode' \
+  || { echo "selkies is not 2.x (missing --mode); do not use GitHub releases/latest v1.6.2" >&2; exit 1; }
 
 ENV DISPLAY=:1 \
   PORT=8080
 
 WORKDIR /opt/webmcp
 USER root
-EXPOSE 6901 8080
+EXPOSE 6901 6902 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8080/health || exit 1
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

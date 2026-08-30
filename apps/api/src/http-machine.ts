@@ -8,14 +8,29 @@ import {
   type Machine,
   type MachineOp,
   type MouseButton,
+  type RecipeStep,
   type Shot,
   type ThemeId,
   type WallpaperId,
 } from "@webmcp-computer/contract";
 import { HttpError } from "./http-error.ts";
 
+// Per-op budgets so a wedged in-guest command (xdotool, du, apt) can't hang the
+// API request forever. Anything not listed uses DEFAULT_TIMEOUT_MS.
+const DEFAULT_TIMEOUT_MS = 15_000;
+const TIMEOUTS: Partial<Record<MachineOp["op"], number>> = {
+  run: 40_000,
+  installPackage: 300_000,
+  browserScreenshot: 30_000,
+  screenshot: 20_000,
+  replayAction: 120_000,
+};
+
 export class HttpMachine implements Machine {
-  constructor(private readonly baseUrl: string) {}
+  constructor(
+    private readonly baseUrl: string,
+    private readonly token?: string,
+  ) {}
 
   snapshot(): Promise<ComputerState> {
     return this.call({ op: "snapshot" }) as Promise<ComputerState>;
@@ -211,15 +226,52 @@ export class HttpMachine implements Machine {
     return this.call({ op: "browserScreenshot", fullPage }) as Promise<Shot>;
   }
 
+  replayAction(steps: RecipeStep[], speed?: number): Promise<{ ran: number }> {
+    // Normalize viewer input kinds into the MachineOps the guest bridge already
+    // has (mouseClick/typeText/key/scroll/mouseDrag), so replay needs no new
+    // in-guest code / image rebuild — the bridge only ever sees op/wait/note.
+    const normalized = steps.map((s): RecipeStep => {
+      switch (s.kind) {
+        case "click":
+          return { kind: "op", op: { op: "mouseClick", x: s.x, y: s.y, button: s.button, clicks: s.clicks }, t: s.t };
+        case "drag":
+          return { kind: "op", op: { op: "mouseDrag", fromX: s.fromX, fromY: s.fromY, toX: s.toX, toY: s.toY }, t: s.t };
+        case "scroll":
+          return { kind: "op", op: { op: "scroll", x: s.x, y: s.y, dy: s.dy }, t: s.t };
+        case "type":
+          // Keep kind "type" so the guest uses --delay 0 (replay burst).
+          return s;
+        case "key":
+          return { kind: "op", op: { op: "key", keys: s.keys }, t: s.t };
+        default:
+          return s;
+      }
+    });
+    return this.call({ op: "replayAction", steps: normalized, speed }) as Promise<{
+      ran: number;
+    }>;
+  }
+
   private async call(op: MachineOp): Promise<unknown> {
     let res: Response;
+    const timeoutMs =
+      op.op === "typeText"
+        ? Math.min(120_000, 1000 + op.text.length * 220)
+        : (TIMEOUTS[op.op] ?? DEFAULT_TIMEOUT_MS);
     try {
       res = await fetch(`${this.baseUrl.replace(/\/$/, "")}/act`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+        },
         body: JSON.stringify(op),
+        signal: AbortSignal.timeout(timeoutMs),
       });
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.name === "TimeoutError") {
+        throw new HttpError(502, { error: "bridge timed out" });
+      }
       throw new HttpError(502, { error: "bridge unreachable" });
     }
     const text = await res.text();

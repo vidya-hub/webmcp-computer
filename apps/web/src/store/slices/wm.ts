@@ -1,5 +1,4 @@
 import type { Computer } from "@webmcp-computer/contract";
-import { blip } from "../../ui/sound.ts";
 import type {
   Bounds,
   CanvasSize,
@@ -46,7 +45,10 @@ export type WmSlice = WmData & {
   clearPhase: (id: string) => void;
   evenBounds: (id: string) => void;
   setCanvasSize: (cw: number, ch: number) => void;
+  arrange: (layout: WmLayout) => number;
 };
+
+export type WmLayout = "tile" | "cascade" | "focus-selected";
 
 export function even(n: number): number {
   return Math.max(2, n - (n % 2));
@@ -296,7 +298,7 @@ export function restoreWm(state: WmData, id: string): Partial<WmData> {
   if (!state.minimized.includes(id)) return {};
   return {
     minimized: state.minimized.filter((x) => x !== id),
-    lifecycle: { ...state.lifecycle, [id]: "entering" },
+    lifecycle: { ...state.lifecycle, [id]: "restoring" },
   };
 }
 
@@ -348,6 +350,46 @@ export function clearPhaseWm(state: WmData, id: string): Partial<WmData> {
   return { lifecycle };
 }
 
+// Re-lay out all open (non-minimized) windows. Returns the affected patch and
+// the number of windows arranged (0 when there are none).
+export function arrangeWm(
+  state: WmData,
+  layout: WmLayout,
+  selectedId: string | null,
+): { patch: Partial<WmData>; count: number } {
+  const ids = state.knownIds.filter(
+    (id) => state.windows[id] && !state.minimized.includes(id),
+  );
+  if (ids.length === 0) return { patch: {}, count: 0 };
+  const windows = { ...state.windows };
+  let zTop = state.zTop;
+
+  if (layout === "cascade") {
+    ids.forEach((id, i) => {
+      windows[id] = { ...tile(i, state.canvas.cw, state.canvas.ch), z: ++zTop };
+    });
+  } else if (layout === "tile") {
+    ids.forEach((id, i) => {
+      const r = overviewTarget(i, ids.length, state.canvas);
+      windows[id] = {
+        x: Math.round(r.x),
+        y: Math.round(r.y),
+        w: even(Math.round(r.w)),
+        h: even(Math.round(r.h)),
+        z: ++zTop,
+      };
+    });
+  } else {
+    const target = selectedId && windows[selectedId] ? selectedId : ids[0]!;
+    windows[target] = { ...snapRect("top", state.canvas), z: ++zTop };
+  }
+
+  return {
+    patch: { windows, zTop, maximizedId: null, snap: null },
+    count: ids.length,
+  };
+}
+
 export function createWmSlice(set: StoreSet, get: StoreGet): WmSlice {
   return {
     ...initialWm,
@@ -362,7 +404,6 @@ export function createWmSlice(set: StoreSet, get: StoreGet): WmSlice {
         return fresh;
       }
       set(next);
-      if (fresh.length > 0) blip("spawn");
       return fresh;
     },
     focus: (id) => set(focusWm(pickWm(get()), id)),
@@ -397,6 +438,15 @@ export function createWmSlice(set: StoreSet, get: StoreGet): WmSlice {
       const cur = get().canvas;
       if (cur.cw === cw && cur.ch === ch) return;
       set({ canvas: { cw, ch } });
+    },
+    arrange: (layout) => {
+      const { patch, count } = arrangeWm(
+        pickWm(get()),
+        layout,
+        get().selectedComputer,
+      );
+      if (count > 0) set(patch);
+      return count;
     },
   };
 }

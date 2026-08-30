@@ -2,6 +2,14 @@
 
 This file is the product. Older plans that still say Nova/Forge, two seeded machines, or hardcoded `/desktops/nova` are stale. Do not implement from them.
 
+> **Amendments (current implementation).** The sections below predate several shipped changes; where they conflict, this block wins:
+> - **Image/desktop:** the guest is `infra/slim` → `webmcp-slim:local` running **Openbox/tint2** (not XFCE); the `webmcp-kasm` path is legacy. Descriptions that say "XFCE" mean the current WM.
+> - **Tools:** the tool set is the `WEBMCP_TOOLS` array in `packages/contract/src/index.ts` (~50 tools), not the historical 13. Machine tools are **always registered**; when no computer is selected they return a "select a computer first" result (they do NOT unmount on selection — ignore any §-level line saying tools mount/unmount on select). `computer_take_screenshot` and `browser_screenshot` return an **image content block**, not base64 text.
+> - **Teach & Replay (record real desktop use):** press **Record** on a computer's window titlebar and everything happening in that desktop during the window is captured — **human mouse/keyboard (recorded in the noVNC viewer as framebuffer-coordinate input steps) and any agent `MachineOp`s**, merged in time order by one API clock — then named/saved and replayed **literally** on the selected computer via a single `replayAction` op. Also: promote-from-tape and authored recipes. Replay is **human-free / agent-gated**: a human clicking Replay runs immediately (even recorded `rm`); an agent's `replay_recorded_action` takes **one** approval that lists gated ops and a preview of typed text. Selecting another window does not discard the recording (destroy of that computer, API shutdown, and the time/step cap do). Tools: `list/get/save/replay/delete_recorded_action`, `list_file_archives`, `delete_file_archive`. Recording itself is human-only (no agent record tool); capture is viewer-first, so no in-guest `xinput`/image rebuild.
+> - **Home persistence (exception to the “ephemeral / no volumes” rule below):** on destroy the human may choose "Destroy and save files" to archive the guest home (user work only — the browser profile/caches are excluded) to MinIO; a future `spawn_computer {restoreArchiveId}` restores it. Tool: `list_file_archives`.
+> - **Approval policy:** `requiresApproval` escalates any command containing a shell metacharacter (`; & | \` $ < > ( ) { }`) in addition to the deny-list; `node`/`npm`/`python` remain allow-listed (the gate is not a sandbox).
+> - **Ops:** `HOST_BACKEND=docker` fails fast instead of falling back to a fake host; the tape is best-effort (never blocks or fails an action); desktops run without `SYS_ADMIN`; the bridge requires a per-spawn `MACHINE_TOKEN`; access is tailnet-only with `ALLOWED_ORIGINS` Origin checks.
+
 Human and agent share live Linux desktops in one browser origin. The agent uses WebMCP on the **parent page**. The human sees those desktops as **windows** on that page. The computer tells the agent what it can do on the **selected** machine. No screenshot clicking. No `mouse_click`.
 
 ```
@@ -245,14 +253,14 @@ The website is one screen. Computers are windows on a void canvas.
 
 **Host chrome (macOS)**
 
-The page is a desktop, not a website nav.
+The page is a glass desktop, not a website nav. No page BIOS; first paint is the desktop. The only boot theater is the in-window overlay while a computer `status === "starting"`.
 
-- 28px glass menu bar: app name, **Action TimeLine**, WebMCP extra / `! approval`.
-- Canvas is the desktop (`canvas-bg`). No activity rail.
-- Floating Dock: one tile per computer, `+` spawn (disabled at 4). Minimized dim. Selected = white dot. Acting = pulse. Click restores + selects.
-- Windows: 12px radius, clip VNC, traffic lights left (close / min / max), title centered, glass titlebar, hairline + shadow. Selected = brighter hairline, not an Ember strip. Title when acting: `AGENT  {verb}`.
-- Approval: centered glass sheet. Ember **only** on Approve fill. Esc rejects.
-- Esc: lightbox → Action TimeLine → reject approval. `1–4` still select computers.
+- 28px glass menu bar: **WebMCP Computer**, Timeline, Recipes, Offline pill, WebMCP extra / `! approval`.
+- Canvas is CSS wallpaper (no photo asset). Inspector **pushes** the canvas (`28px 1fr auto`); the dock stays on the canvas floor.
+- Floating Dock: one tile per computer, `+` spawn (disabled at cap). Selected = solid dot; minimized = hollow. Click restores + selects.
+- Windows: traffic lights (red destroy, yellow minimize FLIP to the tile, green max). Titlebar Timeline opens Tape filtered to that computer.
+- Inspector: Tape | Recipes. Tape is a lane waterfall with **two** shot frames (no compare slider). Esc: lightbox → inspector → approval.
+- Approval: centered glass sheet. Ember **only** on Approve fill.
 
 Guest Linux inside the iframe is unchanged.
 

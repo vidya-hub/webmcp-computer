@@ -7,6 +7,7 @@ export function selectDock(s: AppStore) {
     actingComputerId: s.actingComputerId,
     minimized: s.minimized,
     computersRunning: s.computersRunning,
+    streamFps: s.streamFps,
   };
 }
 
@@ -20,13 +21,11 @@ export function selectApproval(s: AppStore) {
 
 export function selectShellChrome(s: AppStore) {
   return {
-    justBooted: s.justBooted,
     idle: s.idle,
     actingComputerId: s.actingComputerId,
-    booted: s.booted,
-    bootNonce: s.bootNonce,
     timelineOpen: s.timelineOpen,
     pendingApproval: s.pendingApproval,
+    apiOnline: s.apiOnline,
   };
 }
 
@@ -36,6 +35,9 @@ export function selectMenuBar(s: AppStore) {
     approval: Boolean(s.pendingApproval),
     activity: s.activity,
     sound: s.sound,
+    apiOnline: s.apiOnline,
+    recordingComputerId: s.recordingComputerId,
+    toastsVisible: s.toastsVisible,
   };
 }
 
@@ -49,5 +51,7 @@ export function windowSlice(id: string) {
     maximized: s.maximizedId === id,
     lifecycle: s.lifecycle[id] ?? null,
     minimized: s.minimized.includes(id),
+    recording: s.recordingComputerId === id,
+    fps: s.streamFps[id],
   });
 }

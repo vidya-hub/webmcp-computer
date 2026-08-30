@@ -55,4 +55,4 @@ setup_home_quota || true
 printf '%s\n' "export CHROMIUM_FLAGS=\"\$CHROMIUM_FLAGS --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 --user-data-dir=${HOME}/.config/chromium --no-first-run --no-default-browser-check\"" \
   > /etc/chromium.d/webmcp
 
-exec runuser -u "$NAME" -- env HOME="$HOME" USER="$NAME" HOME_JAIL="$HOME" MACHINE_ID="${MACHINE_ID:-}" MACHINE_NAME="${MACHINE_NAME:-}" WALLPAPER="${WALLPAPER:-carbon}" WEBMCP_MEMORY_BYTES="${WEBMCP_MEMORY_BYTES:-}" WEBMCP_DISK_BYTES="${WEBMCP_DISK_BYTES:-}" DISPLAY="${DISPLAY:-:1}" PORT="${PORT:-8080}" /usr/local/bin/session.sh
+exec runuser -u "$NAME" -- env HOME="$HOME" USER="$NAME" HOME_JAIL="$HOME" MACHINE_ID="${MACHINE_ID:-}" MACHINE_NAME="${MACHINE_NAME:-}" MACHINE_TOKEN="${MACHINE_TOKEN:-}" WALLPAPER="${WALLPAPER:-carbon}" WEBMCP_MEMORY_BYTES="${WEBMCP_MEMORY_BYTES:-}" WEBMCP_DISK_BYTES="${WEBMCP_DISK_BYTES:-}" DISPLAY="${DISPLAY:-:1}" PORT="${PORT:-8080}" /usr/local/bin/session.sh

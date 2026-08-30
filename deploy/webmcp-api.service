@@ -1,17 +1,32 @@
 [Unit]
 Description=webmcp-computer control plane (API)
 After=network-online.target docker.service
-Wants=network-online.target
+Wants=network-online.target docker.service
+# Postgres runs as a docker compose stack (deploy/compose.postgres.yml); it is
+# ordered after docker.service above. Tape writes are best-effort so a brief
+# Postgres unavailability at boot no longer fails requests.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/homelab/webmcp-computer
 EnvironmentFile=/home/ubuntu/homelab/webmcp-computer/deploy/.env
-Environment=PATH=/usr/local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOST_BACKEND=docker
+Environment=AUTH_REQUIRED=true
 ExecStart=/home/ubuntu/homelab/webmcp-computer/apps/api/node_modules/.bin/tsx apps/api/src/index.ts
-Restart=on-failure
+Restart=always
 RestartSec=3
+# Give the process time to close the http server + WS clients on stop.
+TimeoutStopSec=10
+# Hardening. NoNewPrivileges is safe (the API never needs to escalate; the
+# docker CLI talks to the socket, not setuid). ProtectSystem=full keeps
+# /usr /boot /etc read-only — verify `tsx` + docker still work after enabling,
+# and drop it if not (WorkingDirectory under /home stays writable).
+NoNewPrivileges=yes
+ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target

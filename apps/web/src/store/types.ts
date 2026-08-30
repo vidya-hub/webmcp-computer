@@ -5,7 +5,7 @@ import type { WmSlice } from "./slices/wm.ts";
 export type Bounds = { x: number; y: number; w: number; h: number; z: number };
 export type Rect = { x: number; y: number; w: number; h: number };
 export type Snap = "left" | "right" | "top" | null;
-export type Phase = "entering" | "closing" | "minimizing";
+export type Phase = "entering" | "closing" | "minimizing" | "restoring";
 export type CanvasSize = { cw: number; ch: number };
 
 export type AppStore = ServerSlice & WmSlice & UiSlice;

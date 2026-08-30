@@ -105,7 +105,7 @@ test("minimize then finish adds the id; restore re-enters", () => {
 
   const restored = { ...done, ...restoreWm(done, "a") };
   assert.deepEqual(restored.minimized, []);
-  assert.equal(restored.lifecycle.a, "entering");
+  assert.equal(restored.lifecycle.a, "restoring");
 });
 
 test("maximize of a minimized window restores it", () => {
@@ -121,4 +121,12 @@ test("patchBounds clamps to the canvas", () => {
   const patched = { ...seeded, ...patchBoundsWm(seeded, "a", { x: -40, w: 40 }) };
   assert.equal(patched.windows.a?.x, 0);
   assert.ok((patched.windows.a?.w ?? 0) >= 320);
+});
+
+test("restore phase is restoring not entering", () => {
+  const seeded = reconcileWm(base(), [{ id: "a" }]).next;
+  const min = { ...seeded, minimized: ["a"] };
+  const restored = { ...min, ...restoreWm(min, "a") };
+  assert.equal(restored.lifecycle.a, "restoring");
+  assert.deepEqual(restored.minimized, []);
 });

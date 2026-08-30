@@ -10,10 +10,10 @@ function env(): NodeJS.ProcessEnv {
   return { ...process.env, DISPLAY: process.env.DISPLAY ?? ":1" };
 }
 
-async function xd(args: string[]): Promise<string> {
+async function xd(args: string[], timeout = 8_000): Promise<string> {
   try {
     const { stdout } = await execFileAsync("xdotool", args, {
-      timeout: 8_000,
+      timeout,
       env: env(),
     });
     return stdout.trim();
@@ -81,11 +81,15 @@ export async function launchApp(
   const cmd = APPS[app];
   if (!cmd) throw new HttpError(400, { error: "unknown app" });
   const { spawn } = await import("node:child_process");
-  spawn(cmd[0], cmd.slice(1), {
+  const child = spawn(cmd[0], cmd.slice(1), {
     detached: true,
     stdio: "ignore",
     env: env(),
-  }).unref();
+  });
+  // A missing binary emits 'error'; with no listener Node throws
+  // ERR_UNHANDLED_ERROR and crashes the bridge.
+  child.on("error", (err) => console.error("launchApp:", err.message));
+  child.unref();
   return { app };
 }
 
@@ -213,8 +217,31 @@ export async function scroll(opts: {
   return { ok: true };
 }
 
-export async function typeText(text: string): Promise<{ ok: true }> {
-  await xd(["type", "--", text]);
+export async function typeText(
+  text: string,
+  delayMs?: number,
+): Promise<{ ok: true }> {
+  // Live agent typing is 60 WPM (--delay 200). Replay passes 0 for a burst.
+  // After ~600 paced characters, the remainder is delay 0 so we stay under 120s.
+  const LIVE = 200;
+  const PACED_MAX = 600;
+  const pacedTimeout = Math.min(120_000, 1000 + Math.min(text.length, PACED_MAX) * 220);
+  if (delayMs === undefined) {
+    if (text.length <= PACED_MAX) {
+      await xd(["type", "--delay", String(LIVE), "--", text], pacedTimeout);
+    } else {
+      await xd(
+        ["type", "--delay", String(LIVE), "--", text.slice(0, PACED_MAX)],
+        pacedTimeout,
+      );
+      await xd(["type", "--delay", "0", "--", text.slice(PACED_MAX)], 30_000);
+    }
+    return { ok: true };
+  }
+  await xd(
+    ["type", "--delay", String(Math.max(0, delayMs)), "--", text],
+    delayMs === 0 ? 15_000 : pacedTimeout,
+  );
   return { ok: true };
 }
 

@@ -3,6 +3,14 @@ import { type ComputerId } from "@webmcp-computer/contract";
 import { createApp } from "./app.ts";
 import { LinuxMachine } from "./linux-machine.ts";
 
+// Log, but never exit: crashing the bridge would take the whole desktop down.
+process.on("unhandledRejection", (err) => {
+  console.error("unhandledRejection:", err);
+});
+process.on("uncaughtException", (err) => {
+  console.error("uncaughtException:", err);
+});
+
 const PORT = Number(process.env.PORT ?? 8080);
 const MACHINE_ID = (process.env.MACHINE_ID ?? "machine") as ComputerId;
 const MACHINE_NAME = process.env.MACHINE_NAME ?? MACHINE_ID;

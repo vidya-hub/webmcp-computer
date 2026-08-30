@@ -10,7 +10,12 @@ export function ApprovalDialog() {
   const opts = pendingApproval.options ?? [];
   return (
     <div className="overlay">
-      <div className="sheet">
+      <div
+        className="sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={pendingApproval.title || "Agent requests permission"}
+      >
         <div className="sheet-mark">Permission</div>
         <div className="sheet-host">{pendingApproval.computerId}</div>
         <h2>{pendingApproval.title || "Agent requests permission"}</h2>

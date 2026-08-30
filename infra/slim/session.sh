@@ -104,7 +104,40 @@ if [ -f "$NOVNC/vnc.html" ] && [ ! -e "$NOVNC/index.html" ]; then
   ln -sf vnc.html "$NOVNC/index.html"
 fi
 
+
 websockify --web="$NOVNC" 0.0.0.0:6901 127.0.0.1:5901 >/tmp/websockify.log 2>&1 &
+
+# Product H.264 path (Selkies 2.x, websockets only). Parent remains VNC_PID.
+if command -v selkies >/dev/null 2>&1; then
+  selkies \
+    --addr=0.0.0.0 \
+    --port=6902 \
+    --mode=websockets \
+    --enable-dual-mode=false \
+    --enable-https=false \
+    --enable-basic-auth=true \
+    --basic-auth-user=selkies \
+    --basic-auth-password="${MACHINE_TOKEN}" \
+    --encoder=h264enc \
+    --use-cpu=true \
+    --enable-resize=false \
+    --manual-width=1280 \
+    --manual-height=800 \
+    --framerate=24 \
+    --video-bitrate=2500 \
+    --audio-enabled=false \
+    --microphone-enabled=false \
+    --webcam-enabled=false \
+    --gamepad-enabled=false \
+    --file-transfers=none \
+    --enable-sharing=false \
+    --command-enabled=false \
+    --enable-clipboard=true \
+    --ui-show-sidebar=false \
+    --ui-show-core-buttons=false \
+    >/tmp/selkies.log 2>&1 &
+fi
+
 
 while kill -0 "$VNC_PID" 2>/dev/null; do
   sleep 2
